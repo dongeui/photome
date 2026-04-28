@@ -1,0 +1,34 @@
+# Runbook
+
+## If GitHub Webhook Delivery Fails
+
+- check `AGENT_WEBHOOK_URL` and `AGENT_WEBHOOK_SECRET`
+- inspect workflow run `Agent PR Webhook`
+- verify Orchestrator endpoint HMAC validation logs
+- do not advance PR stage manually without leaving a comment
+
+## If PR Is Stuck In Wrong Stage
+
+- remove stale stage label
+- add the single correct stage label
+- leave a comment explaining who owns the next action
+- update `STATUS_SNAPSHOT` only if this changes project state, not just one PR state
+
+## If QA Rejects
+
+- set `agent:changes-requested`
+- comment with reproduction steps and expected vs actual
+- return ownership to Developer
+
+## If Planner Rejects
+
+- set `agent:changes-requested`
+- comment with spec mismatch, not implementation advice only
+- keep PR open; do not squash the history until fixed
+
+## If NAS Is Offline In Runtime
+
+- do not delete records
+- keep existing metadata readable
+- record scan failure and retry on next polling cycle
+

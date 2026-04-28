@@ -1,0 +1,49 @@
+"""Database bootstrap and runtime state."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import logging
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.settings import AppSettings
+from app.db.session import create_engine_for_settings, create_session_factory
+from app.models.base import Base
+from app.models import asset, face, job, media, observation, person, semantic, tag  # noqa: F401  ensure models are registered
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DatabaseState:
+    settings: AppSettings
+    engine: Engine
+    session_factory: sessionmaker[Session]
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    @property
+    def database_url(self) -> str:
+        return self.settings.database_url
+
+
+def _ensure_runtime_directories(settings: AppSettings) -> None:
+    settings.data_root.mkdir(parents=True, exist_ok=True)
+    settings.derived_root.mkdir(parents=True, exist_ok=True)
+    settings.thumbnail_root.mkdir(parents=True, exist_ok=True)
+    settings.preview_root.mkdir(parents=True, exist_ok=True)
+    settings.keyframe_root.mkdir(parents=True, exist_ok=True)
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def build_database_state(settings: AppSettings) -> DatabaseState:
+    _ensure_runtime_directories(settings)
+    engine = create_engine_for_settings(settings)
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+    logger.info("database bootstrapped", extra={"database_url": settings.database_url})
+    return DatabaseState(settings=settings, engine=engine, session_factory=session_factory)
