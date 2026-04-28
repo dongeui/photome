@@ -450,11 +450,13 @@ async def gallery_page(
     }}
     .thumb {{
       position: relative;
+      display: block;
       aspect-ratio: 4 / 5;
       background:
         linear-gradient(180deg, rgba(20,32,40,0.02), rgba(20,32,40,0.12)),
         linear-gradient(135deg, rgba(20,32,40,0.12), rgba(20,32,40,0.04));
       overflow: hidden;
+      cursor: zoom-in;
     }}
     .thumb::after {{
       content: "";
@@ -553,6 +555,58 @@ async def gallery_page(
       flex-wrap: wrap;
       font-family: "Inter", "Helvetica Neue", sans-serif;
     }}
+    .lightbox {{
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      background: rgba(10, 15, 18, 0.78);
+      backdrop-filter: blur(14px);
+    }}
+    .lightbox:target {{
+      display: grid;
+    }}
+    .lightbox-backdrop {{
+      position: absolute;
+      inset: 0;
+      cursor: zoom-out;
+    }}
+    .lightbox-panel {{
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 10px;
+      max-width: min(92vw, 1120px);
+      max-height: 92vh;
+    }}
+    .lightbox img {{
+      display: block;
+      max-width: 100%;
+      max-height: calc(92vh - 58px);
+      object-fit: contain;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+    }}
+    .lightbox-caption {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      color: white;
+      font-family: "Inter", "Helvetica Neue", sans-serif;
+      font-size: 0.9rem;
+    }}
+    .lightbox-close {{
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      color: white;
+      text-decoration: none;
+    }}
     @media (max-width: 1100px) {{
       .hero {{ grid-template-columns: 1fr; }}
       form.filters {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
@@ -647,7 +701,7 @@ async def gallery_page(
       </div>
       <span>{'Showing ' + str(offset + 1) + '–' + str(offset + len(items)) if items else 'Showing 0 items'}</span>
     </div>
-    <section class="gallery">
+    <section id="gallery" class="gallery">
       {''.join(cards) if cards else '<article class="card"><div class="body"><p class="summary">No media matched the current filters.</p></div></article>'}
     </section>
     <nav class="pagination">
@@ -770,9 +824,27 @@ def _render_card(*, media_file: MediaFile, asset: DerivedAsset | None, tags: lis
         f'<span class="tag">{escape(tag.tag_type)}: {escape(tag.tag_value)}</span>'
         for tag in tags[:4]
     )
+    preview_id = f"preview-{asset.id}" if asset is not None else ""
+    thumb_href = f"#{preview_id}" if asset is not None else "#gallery"
+    lightbox_html = (
+        f"""
+      <div id="{preview_id}" class="lightbox" aria-label="{escape(media_file.filename)} preview">
+        <a class="lightbox-backdrop" href="#gallery" aria-label="Close preview"></a>
+        <div class="lightbox-panel">
+          <img src="/gallery/assets/{asset.id}" alt="{escape(media_file.filename)} enlarged preview">
+          <div class="lightbox-caption">
+            <span>{escape(media_file.filename)}</span>
+            <a class="lightbox-close" href="#gallery">Close</a>
+          </div>
+        </div>
+      </div>
+        """
+        if asset is not None
+        else ""
+    )
     return f"""
       <article class="card">
-        <a class="thumb" href="/media/{escape(media_file.file_id)}">{image_html}</a>
+        <a class="thumb" href="{thumb_href}" aria-label="Open {escape(media_file.filename)} preview">{image_html}</a>
         <div class="body">
           <div class="row">
             <h2 class="filename">{escape(media_file.filename)}</h2>
@@ -784,6 +856,7 @@ def _render_card(*, media_file: MediaFile, asset: DerivedAsset | None, tags: lis
           <p class="tags">{tag_html or '<span class="tag">no tags</span>'}</p>
         </div>
       </article>
+      {lightbox_html}
     """
 
 
