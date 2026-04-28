@@ -212,7 +212,6 @@ async def dashboard(request: Request) -> HTMLResponse:
         <p>Phase 1 keeps polling NAS originals into a stable local catalog. Phase 2 keeps scheduling semantic enrichment on top of cached media so new files and version changes keep flowing through without manual resets.</p>
         <div class="hero-links">
           <a class="link-btn" href="/gallery">Open Gallery</a>
-          <a class="link-btn" href="/status">View Raw JSON</a>
         </div>
       </div>
       <div class="metric-grid">

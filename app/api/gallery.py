@@ -11,12 +11,14 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
-from sqlalchemy import Select, exists, func, or_, select
+from sqlalchemy import Select, exists, false, func, or_, select
 
 from app.api.deps import require_state
 from app.models.asset import DerivedAsset
 from app.models.media import MediaFile
 from app.models.tag import Tag
+from app.services.search import HybridSearchService
+from app.services.search.backend import SqlAlchemyHybridSearchBackend
 
 
 router = APIRouter(tags=["gallery"])
@@ -24,6 +26,30 @@ router = APIRouter(tags=["gallery"])
 PERSON_TAG_TYPES = ("person", "people", "face")
 PLACE_TAG_TYPES = ("place", "location")
 PAGE_SIZE = 48
+GALLERY_SEARCH_LIMIT = 500
+
+
+@router.get("/", response_class=HTMLResponse)
+async def home_page(
+    request: Request,
+    media_type: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+    person: Optional[str] = Query(default=None),
+    place: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+) -> HTMLResponse:
+    return await gallery_page(
+        request,
+        media_type=media_type,
+        date_from=date_from,
+        date_to=date_to,
+        person=person,
+        place=place,
+        q=q,
+        page=page,
+    )
 
 
 @router.get("/gallery", response_class=HTMLResponse)
@@ -41,22 +67,42 @@ async def gallery_page(
     offset = (page - 1) * PAGE_SIZE
     parsed_date_from = _parse_date(date_from)
     parsed_date_to = _parse_date(date_to)
+    search_meta: dict[str, str] | None = None
+    ranked_ids: list[str] | None = None
 
     with database.session_factory() as session:
+        if q and q.strip():
+            settings = require_state(request, "settings")
+            backend = SqlAlchemyHybridSearchBackend(session, embeddings_root=settings.embeddings_root)
+            service = HybridSearchService(backend)
+            search_results, search_meta = service.search_with_meta(
+                q,
+                limit=GALLERY_SEARCH_LIMIT,
+                place_filter=place,
+                date_from=_start_of_day(parsed_date_from),
+                date_to=_end_of_day(parsed_date_to),
+                mode="hybrid",
+            )
+            ranked_ids = [str(item["file_id"]) for item in search_results]
+
         ids_query = _build_gallery_ids_query(
             media_type=media_type,
             date_from=_start_of_day(parsed_date_from),
             date_to=_end_of_day(parsed_date_to),
             person=person,
             place=place,
-            query=q,
+            query=None if ranked_ids is not None else q,
+            file_ids=ranked_ids,
         )
-        total = int(session.scalar(select(func.count()).select_from(ids_query.subquery())) or 0)
-        file_ids = list(
-            session.scalars(
-                ids_query.limit(PAGE_SIZE).offset(offset)
-            )
-        )
+        if ranked_ids is not None:
+            rank_index = {file_id: index for index, file_id in enumerate(ranked_ids)}
+            matched_ids = list(session.scalars(ids_query))
+            matched_ids.sort(key=lambda file_id: rank_index.get(file_id, len(rank_index)))
+            total = len(matched_ids)
+            file_ids = matched_ids[offset:offset + PAGE_SIZE]
+        else:
+            total = int(session.scalar(select(func.count()).select_from(ids_query.subquery())) or 0)
+            file_ids = list(session.scalars(ids_query.limit(PAGE_SIZE).offset(offset)))
 
         items: list[MediaFile] = []
         asset_map: dict[str, list[DerivedAsset]] = defaultdict(list)
@@ -69,6 +115,9 @@ async def gallery_page(
                     .order_by(MediaFile.last_seen_at.desc(), MediaFile.file_id.desc())
                 )
             )
+            if ranked_ids is not None:
+                page_rank = {file_id: index for index, file_id in enumerate(file_ids)}
+                items.sort(key=lambda item: page_rank.get(item.file_id, len(page_rank)))
             for asset in session.scalars(
                 select(DerivedAsset)
                 .where(DerivedAsset.file_id.in_(file_ids))
@@ -102,6 +151,7 @@ async def gallery_page(
     place_available = bool(place_options)
     active_filter_summary = _render_active_filter_summary(
         q=q,
+        search_meta=search_meta,
         media_type=media_type,
         date_from=date_from,
         date_to=date_to,
@@ -533,9 +583,7 @@ async def gallery_page(
         <h1>Fast paths into your photo archive.</h1>
         <p>Server-rendered, derived-thumbnail gallery tuned for quick scanning. The first screen prioritizes visible cards, the rest stays lightweight until needed.</p>
         <div class="hero-links">
-          <a class="button secondary" href="/search-ui">Semantic Search</a>
           <a class="button secondary" href="/dashboard">Service Dashboard</a>
-          <a class="button secondary" href="/status">Raw Status</a>
         </div>
       </div>
       <div class="hero-stats">
@@ -553,7 +601,7 @@ async def gallery_page(
       <form class="filters" method="get" action="/gallery">
         <label>
           Search
-          <input type="search" name="q" value="{escape(q or '')}" placeholder="filename, path, file id">
+          <input type="search" name="q" value="{escape(q or '')}" placeholder="face, baby, receipt, 어르굴, filename">
         </label>
         <label>
           Media Type
@@ -594,6 +642,7 @@ async def gallery_page(
     <div class="meta-bar">
       <div class="meta-pillset">
         <span class="meta-pill">{total} items{_render_filter_hint(person, place)}</span>
+        {_render_search_mode_pill(search_meta)}
         <span class="meta-pill">Page {page} of {page_count}</span>
       </div>
       <span>{'Showing ' + str(offset + 1) + '–' + str(offset + len(items)) if items else 'Showing 0 items'}</span>
@@ -637,10 +686,15 @@ def _build_gallery_ids_query(
     person: str | None,
     place: str | None,
     query: str | None,
+    file_ids: list[str] | None = None,
 ) -> Select:
     statement = select(MediaFile.file_id).where(
         MediaFile.status.not_in(("missing", "replaced"))
     )
+    if file_ids is not None:
+        if not file_ids:
+            return statement.where(false())
+        statement = statement.where(MediaFile.file_id.in_(file_ids))
 
     if media_type:
         statement = statement.where(MediaFile.media_kind == media_type)
@@ -783,6 +837,7 @@ def _render_filter_hint(person: str | None, place: str | None) -> str:
 def _render_active_filter_summary(
     *,
     q: str | None,
+    search_meta: dict[str, str] | None = None,
     media_type: str | None,
     date_from: str | None,
     date_to: str | None,
@@ -792,6 +847,8 @@ def _render_active_filter_summary(
     filters: list[tuple[str, str]] = []
     if q:
         filters.append(("Search", q))
+        if search_meta:
+            filters.append(("Mode", f"{search_meta.get('effective_mode', 'hybrid')} / {search_meta.get('intent_reason', 'fallback')}"))
     if media_type:
         filters.append(("Media", media_type))
     if date_from:
@@ -810,6 +867,14 @@ def _render_active_filter_summary(
         f'<span class="filter-chip"><strong>{escape(label)}</strong> {escape(value)}</span>'
         for label, value in filters
     )
+
+
+def _render_search_mode_pill(search_meta: dict[str, str] | None) -> str:
+    if not search_meta:
+        return ""
+    mode = search_meta.get("effective_mode", "hybrid")
+    reason = search_meta.get("intent_reason", "fallback")
+    return f'<span class="meta-pill">Search {escape(mode)} / {escape(reason)}</span>'
 
 
 def _page_url(request: Request, page: int) -> str:
