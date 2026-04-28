@@ -21,7 +21,7 @@ from app.models.media import MediaFile
 from app.models.person import Person
 from app.models.tag import Tag
 from app.services.analysis import FaceAnalysisError, FaceAnalysisService
-from app.services.analysis import image_signals
+from app.services.analysis import auto_tags, image_signals
 from app.services.embedding import clip as clip_embedding
 from app.services.fingerprint.service import FingerprintService
 from app.services.metadata.service import MetadataService
@@ -271,8 +271,10 @@ class ProcessingPipeline:
         catalog = MediaCatalog(session)
         result: dict[str, Any] = {"file_id": media_file.file_id, "assets": []}
         preserved_tags, existing_place_tags, existing_person_tags = self._split_existing_tags(media_file.tags)
+        preserved_tags = [tag for tag in preserved_tags if tag.tag_type != "auto"]
         place_tags = self._materialize_place_tags(media_file)
         person_tags = existing_person_tags
+        auto_tag_inputs: list[MediaTagInput] = []
         face_result: FaceMaterializationResult | None = None
         analysis_warnings: list[str] = []
         media_kind = media_file.media_kind
@@ -290,6 +292,7 @@ class ProcessingPipeline:
                 analysis_warnings.extend(face_result.warnings)
             semantic_result = self._materialize_image_semantics(session, media_file)
             if semantic_result:
+                auto_tag_inputs = semantic_result.pop("_auto_tag_inputs", [])
                 result["semantic"] = semantic_result
             catalog.set_media_status(media_file.file_id, status="thumb_done", now=datetime.utcnow())
 
@@ -306,7 +309,7 @@ class ProcessingPipeline:
         else:
             raise ValueError(f"Unsupported media kind: {media_kind}")
 
-        tags = catalog.upsert_tags(media_file.file_id, preserved_tags + place_tags + person_tags)
+        tags = catalog.upsert_tags(media_file.file_id, preserved_tags + place_tags + person_tags + auto_tag_inputs)
         if tags:
             result["tags"] = [{"type": tag.tag_type, "value": tag.tag_value} for tag in tags]
         elif place_tags or existing_place_tags or person_tags or existing_person_tags:
@@ -335,12 +338,26 @@ class ProcessingPipeline:
         signal_payload = image_signals.extract_analysis(str(source_path), ocr_text)
         semantic_catalog.upsert_analysis(media_file.file_id, signal_payload)
         result["analysis"] = signal_payload
+        signal_tags = auto_tags.tags_from_signals(signal_payload, ocr_text)
+        embedding_tags: list[MediaTagInput] = []
 
         if self._semantic_clip_enabled:
             embedding_result = self._materialize_clip_embedding(media_file)
             if embedding_result:
                 semantic_catalog.register_embedding(media_file.file_id, **embedding_result)
                 result["embedding"] = embedding_result
+                embedding_tags = auto_tags.tags_from_embedding_file(
+                    embedding_result["embedding_ref"],
+                    self._embeddings_root,
+                )
+
+        generated_tags = auto_tags.merge_auto_tags(signal_tags, embedding_tags)
+        if generated_tags:
+            result["_auto_tag_inputs"] = generated_tags
+            result["auto_tags"] = [
+                {"type": tag.tag_type, "value": tag.tag_value}
+                for tag in generated_tags
+            ]
 
         return result
 
