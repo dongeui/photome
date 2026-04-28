@@ -28,6 +28,7 @@ PERSON_TAG_TYPES = ("person", "people", "face")
 PLACE_TAG_TYPES = ("place", "location")
 PAGE_SIZE = 48
 GALLERY_SEARCH_LIMIT = 500
+QUICK_SEARCH_TERMS = ("얼굴", "아기", "여자", "영수증", "화면", "baby", "receipt")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -422,6 +423,37 @@ async def gallery_page(
       color: rgba(20, 32, 40, 0.45);
       cursor: not-allowed;
     }}
+    .quick-searches {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 10px;
+      padding: 0 4px;
+      font-family: "Inter", "Helvetica Neue", sans-serif;
+    }}
+    .quick-searches span {{
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .quick-chip {{
+      padding: 7px 10px;
+      border: 1px solid rgba(20, 32, 40, 0.1);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.66);
+      color: #2f3f48;
+      font-size: 0.84rem;
+      font-weight: 700;
+      text-decoration: none;
+    }}
+    .quick-chip.active {{
+      border-color: rgba(208, 93, 51, 0.35);
+      background: var(--accent-soft);
+      color: var(--accent-deep);
+    }}
     .meta-pillset {{
       display: flex;
       gap: 8px;
@@ -740,6 +772,10 @@ async def gallery_page(
         <datalist id="person-options">{_render_datalist_options(person_options)}</datalist>
         <datalist id="place-options">{_render_datalist_options(place_options)}</datalist>
       </form>
+      <div class="quick-searches">
+        <span>Quick search</span>
+        {_render_quick_searches(request, q)}
+      </div>
     </div>
     <section class="active-filters">
       <span class="active-filters-title">Active filters</span>
@@ -979,6 +1015,21 @@ def _render_media_type_options(selected: str | None) -> str:
 
 def _render_datalist_options(values: list[str]) -> str:
     return "".join(f'<option value="{escape(value)}"></option>' for value in values)
+
+
+def _render_quick_searches(request: Request, active_query: str | None) -> str:
+    active = (active_query or "").strip().casefold()
+    return "".join(
+        f'<a class="quick-chip{" active" if term.casefold() == active else ""}" href="{escape(_quick_search_url(request, term))}">{escape(term)}</a>'
+        for term in QUICK_SEARCH_TERMS
+    )
+
+
+def _quick_search_url(request: Request, term: str) -> str:
+    params = dict(request.query_params)
+    params["q"] = term
+    params.pop("page", None)
+    return f"/gallery?{urlencode(params)}"
 
 
 def _render_filter_hint(person: str | None, place: str | None) -> str:

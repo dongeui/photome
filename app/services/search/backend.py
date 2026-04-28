@@ -10,6 +10,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.face import Face
+from app.models.annotation import MediaAnnotation
 from app.models.media import MediaFile
 from app.models.semantic import MediaAnalysisSignal, MediaEmbedding, MediaOCR
 from app.models.tag import Tag
@@ -60,6 +61,7 @@ class SqlAlchemyHybridSearchBackend:
         pattern = _like_pattern(query)
         statement = (
             select(MediaFile)
+            .outerjoin(MediaAnnotation, MediaAnnotation.file_id == MediaFile.file_id)
             .outerjoin(Tag, Tag.file_id == MediaFile.file_id)
             .outerjoin(MediaOCR, MediaOCR.file_id == MediaFile.file_id)
             .where(MediaFile.status != "missing")
@@ -68,6 +70,8 @@ class SqlAlchemyHybridSearchBackend:
                     func.lower(MediaFile.filename).like(pattern),
                     func.lower(MediaFile.current_path).like(pattern),
                     func.lower(MediaFile.relative_path).like(pattern),
+                    func.lower(MediaAnnotation.title).like(pattern),
+                    func.lower(MediaAnnotation.description).like(pattern),
                     func.lower(Tag.tag_value).like(pattern),
                     func.lower(MediaOCR.text_content).like(pattern),
                 )

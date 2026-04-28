@@ -100,6 +100,14 @@ def test_media_annotation_updates_display_name_description_and_custom_tags(
     assert "Dinner receipt from the family trip." in gallery
     assert "no tags" not in gallery
 
+    title_search = client.get("/search", params={"q": "Trip"})
+    assert title_search.status_code == 200
+    assert title_search.json()["items"][0]["file_id"] == item["file_id"]
+
+    gallery_title_search = client.get("/gallery", params={"q": "Trip"}).text
+    assert "Trip receipt" in gallery_title_search
+    assert "Dinner receipt from the family trip." in gallery_title_search
+
 
 def scan_twice(client: TestClient) -> tuple[dict, dict]:
     first = client.post("/scan").json()
