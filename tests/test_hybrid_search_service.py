@@ -25,6 +25,8 @@ class FakeBackend:
         ]
 
     def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]:
+        if query == "baby":
+            return [{"file_id": "auto-baby", "tag_exact_match": True, "tags": [{"type": "auto", "value": "baby"}]}]
         return []
 
     def encode_text(self, query: str) -> bytes:
@@ -85,3 +87,13 @@ def test_face_query_routes_to_semantic() -> None:
     assert meta["effective_mode"] == "semantic"
     assert results[0]["file_id"] == "face-file"
     assert results[0]["match_reason"] == "clip"
+
+
+def test_semantic_query_uses_auto_tags_as_ranking_signal() -> None:
+    service = HybridSearchService(FakeBackend())
+
+    results, meta = service.search_with_meta("baby", limit=5, mode="hybrid")
+
+    assert meta["effective_mode"] == "semantic"
+    assert results[0]["file_id"] == "auto-baby"
+    assert results[0]["match_explanation"] == "exact tag match"

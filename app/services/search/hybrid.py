@@ -68,7 +68,7 @@ class HybridSearchService:
 
         shadow_results = (
             self._backend.search_by_shadow_doc(cleaned, limit=limit)
-            if effective_mode in {"hybrid", "ocr"}
+            if effective_mode in {"hybrid", "ocr", "semantic"}
             else []
         )
         clip_results = (
@@ -87,8 +87,9 @@ class HybridSearchService:
             shadow_results,
         )
         apply_exact_ocr_boost(cleaned, merged)
+        apply_exact_tag_boost(merged)
         set_match_explanations(merged)
-        merged.sort(key=lambda item: item.get("rank_score", 0.0), reverse=True)
+        merged.sort(key=search_sort_key, reverse=True)
         return merged[:limit], {"effective_mode": effective_mode, "intent_reason": intent_reason}
 
     def _search_clip_variants(
@@ -205,7 +206,7 @@ def intent_weights(effective_mode: str, intent_reason: str) -> dict[str, float]:
     if effective_mode == "ocr":
         return {"ocr": 0.62, "clip": 0.04, "shadow": 0.22}
     if effective_mode == "semantic":
-        return {"ocr": 0.03, "clip": 0.74, "shadow": 0.05}
+        return {"ocr": 0.03, "clip": 0.70, "shadow": 0.18}
     if intent_reason == "auto-mixed":
         return {"ocr": 0.36, "clip": 0.34, "shadow": 0.18}
     return {"ocr": 0.35, "clip": 0.36, "shadow": 0.17}
@@ -214,6 +215,8 @@ def intent_weights(effective_mode: str, intent_reason: str) -> dict[str, float]:
 def combined_match_reason(hits: set[str]) -> str:
     if "ocr" in hits and "clip" in hits:
         return "ocr+clip"
+    if "clip" in hits and "shadow" in hits:
+        return "clip+shadow"
     if "ocr" in hits:
         return "ocr"
     if "clip" in hits:
@@ -238,12 +241,30 @@ def apply_exact_ocr_boost(query: str, results: list[dict]) -> None:
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.12)
 
 
+def apply_exact_tag_boost(results: list[dict]) -> None:
+    for result in results:
+        if result.get("tag_exact_match"):
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.9)
+
+
+def search_sort_key(item: dict) -> tuple[bool, bool, float]:
+    return (
+        bool(item.get("tag_exact_match")),
+        bool(item.get("ocr_exact_match")),
+        float(item.get("rank_score") or 0.0),
+    )
+
+
 def set_match_explanations(results: list[dict]) -> None:
     for result in results:
         if result.get("ocr_exact_match"):
             result["match_explanation"] = "exact OCR text"
+        elif result.get("tag_exact_match"):
+            result["match_explanation"] = "exact tag match"
         elif result.get("match_reason") == "ocr+clip":
             result["match_explanation"] = "OCR and visual match"
+        elif result.get("match_reason") == "clip+shadow":
+            result["match_explanation"] = "visual and tag match"
         elif result.get("match_reason") == "clip":
             result["match_explanation"] = "visual semantic match"
         elif result.get("match_reason") == "ocr":

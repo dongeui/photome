@@ -54,9 +54,12 @@ class SqlAlchemyHybridSearchBackend:
         return rows[:limit]
 
     def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]:
-        hinted = self._hinted_shadow_results(query, limit=limit)
+        tagged = self._tagged_shadow_results(query, limit=limit)
+        hinted = self._hinted_shadow_results(query, limit=limit, exclude_file_ids={str(item["file_id"]) for item in tagged})
         if hinted:
-            return hinted
+            return (tagged + hinted)[:limit]
+        if tagged:
+            return tagged
 
         pattern = _like_pattern(query)
         statement = (
@@ -87,7 +90,34 @@ class SqlAlchemyHybridSearchBackend:
             results.append(self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow"))
         return results[:limit]
 
-    def _hinted_shadow_results(self, query: str, *, limit: int) -> list[dict]:
+    def _tagged_shadow_results(self, query: str, *, limit: int) -> list[dict]:
+        lowered = query.casefold().strip()
+        if not lowered:
+            return []
+
+        exact_statement = (
+            select(MediaFile)
+            .join(Tag, Tag.file_id == MediaFile.file_id)
+            .where(MediaFile.status != "missing")
+            .where(func.lower(Tag.tag_value) == lowered)
+            .order_by(
+                (Tag.tag_type == "auto").desc(),
+                (Tag.tag_type == "custom").desc(),
+                MediaFile.exif_datetime.desc().nullslast(),
+                MediaFile.updated_at.desc(),
+            )
+            .limit(max(1, limit))
+        )
+        results = []
+        for media_file in self._session.scalars(exact_statement):
+            ocr = self._session.get(MediaOCR, media_file.file_id)
+            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
+            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="tag")
+            result["tag_exact_match"] = True
+            results.append(result)
+        return results
+
+    def _hinted_shadow_results(self, query: str, *, limit: int, exclude_file_ids: set[str] | None = None) -> list[dict]:
         lowered = query.casefold().strip()
         wants_faces = any(hint in lowered for hint in FACE_HINTS)
         wants_text = any(hint in lowered for hint in TEXT_HINTS)
@@ -102,6 +132,8 @@ class SqlAlchemyHybridSearchBackend:
             .where(MediaFile.status != "missing")
             .group_by(MediaFile.file_id)
         )
+        if exclude_file_ids:
+            statement = statement.where(MediaFile.file_id.not_in(exclude_file_ids))
         if wants_text:
             statement = statement.where(
                 or_(
