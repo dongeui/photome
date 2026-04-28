@@ -180,158 +180,106 @@ async def gallery_page(
   <style>
     :root {{
       color-scheme: light;
-      --bg: #f5f2ea;
-      --paper: rgba(255, 252, 247, 0.78);
-      --panel: rgba(255, 255, 255, 0.88);
-      --panel-strong: rgba(255, 255, 255, 0.96);
-      --text: #142028;
-      --muted: #60707b;
-      --line: rgba(20, 32, 40, 0.1);
-      --line-strong: rgba(20, 32, 40, 0.16);
-      --accent: #d05d33;
-      --accent-deep: #8a3a22;
-      --accent-soft: rgba(208, 93, 51, 0.12);
-      --shadow: 0 18px 50px rgba(20, 32, 40, 0.08);
-      --shadow-tight: 0 10px 28px rgba(20, 32, 40, 0.06);
-      --hero-gradient: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 247, 238, 0.82) 52%, rgba(237, 244, 248, 0.78));
+      --bg: #f6f7f8;
+      --panel: rgba(255, 255, 255, 0.94);
+      --panel-strong: #ffffff;
+      --text: #172026;
+      --muted: #66727c;
+      --line: rgba(23, 32, 38, 0.1);
+      --line-strong: rgba(23, 32, 38, 0.18);
+      --accent: #26736b;
+      --accent-deep: #174f49;
+      --accent-soft: rgba(38, 115, 107, 0.11);
+      --shadow: 0 8px 24px rgba(23, 32, 38, 0.07);
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      font-family: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", serif;
-      background:
-        radial-gradient(circle at top left, rgba(208, 93, 51, 0.18), transparent 24%),
-        radial-gradient(circle at top right, rgba(64, 102, 140, 0.12), transparent 26%),
-        linear-gradient(180deg, #fbf8f2 0%, var(--bg) 46%, #f1ede4 100%);
+      font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
       color: var(--text);
     }}
     a {{ color: inherit; }}
     .shell {{
-      width: min(1360px, calc(100vw - 28px));
+      width: min(1400px, calc(100vw - 28px));
       margin: 0 auto;
-      padding: 20px 0 48px;
+      padding: 14px 0 42px;
     }}
-    .hero {{
-      position: relative;
-      isolation: isolate;
-      display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(240px, .8fr);
-      gap: 18px;
-      margin-bottom: 18px;
-      padding: 26px;
-      border: 1px solid var(--line);
-      border-radius: 30px;
-      background: var(--hero-gradient);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }}
-    .hero::after {{
-      content: "";
-      position: absolute;
-      inset: auto -8% -28% auto;
-      width: 280px;
-      height: 280px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(208, 93, 51, 0.18), transparent 66%);
-      z-index: -1;
-      filter: blur(8px);
-    }}
-    h1 {{
-      margin: 0 0 8px;
-      font-size: clamp(2.2rem, 4vw, 4.2rem);
-      line-height: 0.96;
-      letter-spacing: -0.03em;
-    }}
-    .eyebrow {{
-      display: inline-flex;
-      margin-bottom: 12px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(20, 32, 40, 0.06);
-      color: var(--accent-deep);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
-      font-size: 0.74rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }}
-    .hero-copy p {{
-      margin: 0;
-      color: var(--muted);
-      max-width: 58ch;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
-      font-size: 1rem;
-      line-height: 1.55;
-    }}
-    .hero-stats {{
-      display: grid;
-      gap: 10px;
-      align-content: end;
-    }}
-    .hero-links {{
+    .topbar {{
       display: flex;
-      gap: 10px;
-      margin-top: 18px;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 12px;
+      padding: 10px 2px 8px;
+    }}
+    .brand {{
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
       flex-wrap: wrap;
     }}
-    .stat-card {{
-      padding: 14px 16px;
-      border: 1px solid rgba(20, 32, 40, 0.08);
-      border-radius: 22px;
-      background: rgba(255, 255, 255, 0.72);
-      backdrop-filter: blur(10px);
-      box-shadow: var(--shadow-tight);
+    h1 {{
+      margin: 0;
+      font-size: clamp(1.45rem, 2vw, 2.1rem);
+      line-height: 1;
+      letter-spacing: 0;
     }}
-    .stat-label {{
-      display: block;
-      margin-bottom: 4px;
+    .stat-strip {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
       color: var(--muted);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
-      font-size: 0.76rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 0.9rem;
     }}
-    .stat-value {{
-      display: block;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
-      font-size: clamp(1.2rem, 2vw, 1.7rem);
-      font-weight: 700;
-      letter-spacing: -0.03em;
+    .stat-card {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 5px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+    }}
+    .stat-card strong {{
+      color: var(--text);
+      font-weight: 800;
     }}
     .toolbar {{
       position: sticky;
-      top: 12px;
+      top: 8px;
       z-index: 20;
-      margin-bottom: 18px;
+      margin-bottom: 10px;
     }}
     form.filters {{
       display: grid;
-      grid-template-columns: 1.2fr repeat(5, minmax(120px, .6fr)) auto;
-      gap: 10px;
-      padding: 14px;
-      border: 1px solid rgba(20, 32, 40, 0.08);
-      border-radius: 22px;
-      background: color-mix(in srgb, var(--paper) 72%, white);
-      backdrop-filter: blur(16px) saturate(140%);
-      box-shadow: var(--shadow-tight);
+      grid-template-columns: minmax(280px, 1.6fr) minmax(126px, .52fr) repeat(2, minmax(136px, .55fr)) repeat(2, minmax(150px, .65fr)) auto;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(12px) saturate(130%);
+      box-shadow: var(--shadow);
     }}
     label {{
       display: grid;
       gap: 5px;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
       font-size: 0.76rem;
       font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
       text-transform: uppercase;
       color: var(--muted);
     }}
     input, select {{
       width: 100%;
-      min-height: 44px;
-      padding: 11px 13px;
-      border: 1px solid rgba(20, 32, 40, 0.12);
-      border-radius: 14px;
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.9);
       color: var(--text);
       font: 500 0.95rem "Inter", "Helvetica Neue", sans-serif;
@@ -346,21 +294,20 @@ async def gallery_page(
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 44px;
-      padding: 10px 16px;
-      border-radius: 999px;
+      min-height: 42px;
+      padding: 9px 14px;
+      border-radius: 8px;
       border: 1px solid transparent;
-      background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+      background: var(--accent);
       color: white;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
       font-weight: 600;
       text-decoration: none;
       cursor: pointer;
-      box-shadow: 0 10px 24px rgba(208, 93, 51, 0.22);
+      box-shadow: none;
     }}
     .button.secondary {{
       border-color: var(--line-strong);
-      background: rgba(255, 255, 255, 0.7);
+      background: var(--panel);
       color: var(--text);
       box-shadow: none;
     }}
@@ -369,30 +316,18 @@ async def gallery_page(
       justify-content: space-between;
       gap: 12px;
       align-items: center;
-      margin: 8px 0 18px;
+      margin: 6px 0 12px;
       color: var(--muted);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
       font-size: 0.92rem;
       flex-wrap: wrap;
     }}
     .active-filters {{
-      display: grid;
-      gap: 8px;
-      margin: 0 0 16px;
-    }}
-    .active-filters-title {{
-      color: var(--muted);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
-      font-size: 0.8rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      margin: 0 0 8px;
     }}
     .active-filters-list {{
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
     }}
     .filter-chip {{
       display: inline-flex;
@@ -400,8 +335,8 @@ async def gallery_page(
       gap: 6px;
       padding: 8px 10px;
       border-radius: 999px;
-      border: 1px solid rgba(20, 32, 40, 0.08);
-      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      background: var(--panel);
       color: #31424c;
       font-size: 0.88rem;
     }}
@@ -412,15 +347,14 @@ async def gallery_page(
     .control-note {{
       margin: 0;
       color: var(--muted);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
       font-size: 0.72rem;
       font-weight: 600;
       letter-spacing: 0;
       text-transform: none;
     }}
     .control-unavailable input {{
-      background: rgba(20, 32, 40, 0.04);
-      color: rgba(20, 32, 40, 0.45);
+      background: rgba(23, 32, 38, 0.04);
+      color: rgba(23, 32, 38, 0.45);
       cursor: not-allowed;
     }}
     .quick-searches {{
@@ -428,29 +362,28 @@ async def gallery_page(
       gap: 8px;
       flex-wrap: wrap;
       align-items: center;
-      margin-top: 10px;
-      padding: 0 4px;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
+      margin-top: 8px;
+      padding: 0 2px;
     }}
     .quick-searches span {{
       color: var(--muted);
       font-size: 0.78rem;
       font-weight: 700;
-      letter-spacing: 0.06em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }}
     .quick-chip {{
-      padding: 7px 10px;
-      border: 1px solid rgba(20, 32, 40, 0.1);
+      padding: 6px 10px;
+      border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.66);
+      background: var(--panel);
       color: #2f3f48;
       font-size: 0.84rem;
       font-weight: 700;
       text-decoration: none;
     }}
     .quick-chip.active {{
-      border-color: rgba(208, 93, 51, 0.35);
+      border-color: rgba(38, 115, 107, 0.36);
       background: var(--accent-soft);
       color: var(--accent-deep);
     }}
@@ -465,49 +398,41 @@ async def gallery_page(
       gap: 6px;
       padding: 8px 10px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.65);
-      border: 1px solid rgba(20, 32, 40, 0.08);
+      background: var(--panel);
+      border: 1px solid var(--line);
     }}
     .gallery {{
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 18px;
+      grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+      gap: 12px;
     }}
     .card {{
       display: flex;
       flex-direction: column;
       min-height: 100%;
       overflow: hidden;
-      border-radius: 24px;
-      border: 1px solid rgba(20, 32, 40, 0.08);
+      border-radius: 8px;
+      border: 1px solid var(--line);
       background: var(--panel-strong);
-      box-shadow: var(--shadow-tight);
+      box-shadow: 0 4px 14px rgba(23, 32, 38, 0.05);
       transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
       content-visibility: auto;
       contain-intrinsic-size: 360px;
     }}
     .card:hover {{
       transform: translateY(-2px);
-      box-shadow: 0 18px 34px rgba(20, 32, 40, 0.1);
-      border-color: rgba(20, 32, 40, 0.14);
+      box-shadow: 0 10px 24px rgba(23, 32, 38, 0.09);
+      border-color: var(--line-strong);
     }}
     .thumb {{
       position: relative;
       display: block;
       aspect-ratio: 4 / 5;
       background:
-        linear-gradient(180deg, rgba(20,32,40,0.02), rgba(20,32,40,0.12)),
-        linear-gradient(135deg, rgba(20,32,40,0.12), rgba(20,32,40,0.04));
+        linear-gradient(180deg, rgba(23,32,38,0.02), rgba(23,32,38,0.1)),
+        linear-gradient(135deg, rgba(23,32,38,0.1), rgba(23,32,38,0.04));
       overflow: hidden;
       cursor: zoom-in;
-    }}
-    .thumb::after {{
-      content: "";
-      position: absolute;
-      inset: auto 0 0;
-      height: 34%;
-      background: linear-gradient(180deg, transparent, rgba(20, 32, 40, 0.16));
-      pointer-events: none;
     }}
     .thumb img {{
       width: 100%;
@@ -528,8 +453,8 @@ async def gallery_page(
     }}
     .body {{
       display: grid;
-      gap: 9px;
-      padding: 14px 15px 16px;
+      gap: 8px;
+      padding: 11px 12px 13px;
     }}
     .row {{
       display: flex;
@@ -539,7 +464,7 @@ async def gallery_page(
     }}
     .filename {{
       margin: 0;
-      font-size: 1.02rem;
+      font-size: 0.98rem;
       line-height: 1.2;
       letter-spacing: -0.02em;
       word-break: break-word;
@@ -549,24 +474,22 @@ async def gallery_page(
       padding: 5px 8px;
       border-radius: 999px;
       background: var(--accent-soft);
-      color: var(--accent);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
+      color: var(--accent-deep);
       font-size: 0.8rem;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
     }}
     .summary, .detail, .tags, .pathline {{
       margin: 0;
       color: var(--muted);
-      font-family: "Inter", "Helvetica Neue", sans-serif;
       font-size: 0.88rem;
       line-height: 1.42;
     }}
     .detail {{
       font-size: 0.8rem;
       font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }}
     .summary {{
@@ -587,12 +510,11 @@ async def gallery_page(
       padding: 4px 8px;
       border-radius: 999px;
       background: rgba(24, 32, 38, 0.07);
-      border: 1px solid rgba(20, 32, 40, 0.06);
+      border: 1px solid var(--line);
     }}
     .edit-panel {{
-      border-top: 1px solid rgba(20, 32, 40, 0.08);
+      border-top: 1px solid var(--line);
       padding-top: 8px;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
     }}
     .edit-panel summary {{
       color: var(--accent-deep);
@@ -609,8 +531,8 @@ async def gallery_page(
       width: 100%;
       min-height: 36px;
       padding: 8px 10px;
-      border: 1px solid rgba(20, 32, 40, 0.12);
-      border-radius: 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.92);
       color: var(--text);
       font: 500 0.84rem "Inter", "Helvetica Neue", sans-serif;
@@ -624,7 +546,7 @@ async def gallery_page(
       min-height: 34px;
       padding: 7px 12px;
       border: 0;
-      border-radius: 999px;
+      border-radius: 8px;
       background: var(--text);
       color: white;
       font: 700 0.82rem "Inter", "Helvetica Neue", sans-serif;
@@ -637,7 +559,6 @@ async def gallery_page(
       margin-top: 22px;
       align-items: center;
       flex-wrap: wrap;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
     }}
     .lightbox {{
       position: fixed;
@@ -670,7 +591,7 @@ async def gallery_page(
       max-width: 100%;
       max-height: calc(92vh - 58px);
       object-fit: contain;
-      border-radius: 12px;
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.08);
       box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
     }}
@@ -680,28 +601,25 @@ async def gallery_page(
       gap: 12px;
       align-items: center;
       color: white;
-      font-family: "Inter", "Helvetica Neue", sans-serif;
       font-size: 0.9rem;
     }}
     .lightbox-close {{
       flex: 0 0 auto;
       padding: 8px 12px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.14);
       color: white;
       text-decoration: none;
     }}
     @media (max-width: 1100px) {{
-      .hero {{ grid-template-columns: 1fr; }}
       form.filters {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
     }}
     @media (max-width: 720px) {{
       .shell {{ width: min(100vw - 18px, 1360px); padding-top: 14px; }}
-      .hero {{ padding: 22px; border-radius: 24px; }}
+      .topbar {{ align-items: flex-start; flex-direction: column; }}
       .toolbar {{ top: 8px; }}
       form.filters {{ grid-template-columns: 1fr 1fr; padding: 12px; }}
       .gallery {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-      .card {{ border-radius: 18px; }}
       .thumb {{ aspect-ratio: 1 / 1.15; }}
     }}
     @media (max-width: 540px) {{
@@ -715,26 +633,17 @@ async def gallery_page(
 </head>
 <body>
   <main class="shell">
-    <section class="hero">
-      <div class="hero-copy">
-        <span class="eyebrow">Thumbnail-first browser</span>
-        <h1>Fast paths into your photo archive.</h1>
-        <p>Server-rendered, derived-thumbnail gallery tuned for quick scanning. The first screen prioritizes visible cards, the rest stays lightweight until needed.</p>
-        <div class="hero-links">
-          <a class="button secondary" href="/dashboard">Service Dashboard</a>
+    <header class="topbar">
+      <div class="brand">
+        <h1>photome</h1>
+        <div class="stat-strip">
+          <span class="stat-card"><strong>{total}</strong> items</span>
+          <span class="stat-card"><strong>{len(items)}</strong> cards</span>
+          <span class="stat-card">Page <strong>{page}</strong>/{page_count}</span>
         </div>
       </div>
-      <div class="hero-stats">
-        <div class="stat-card">
-          <span class="stat-label">Visible Catalog</span>
-          <span class="stat-value">{total} items</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Current View</span>
-          <span class="stat-value">{len(items)} cards</span>
-        </div>
-      </div>
-    </section>
+      <a class="button secondary" href="/dashboard">Service Dashboard</a>
+    </header>
     <div class="toolbar">
       <form class="filters" method="get" action="/gallery">
         <label>
@@ -766,7 +675,7 @@ async def gallery_page(
           <span class="control-note">{'Place tag filter is unavailable in this catalog.' if not place_available else 'Matches place/location tags when indexed.'}</span>
         </label>
         <div class="actions">
-          <button class="button" type="submit">Apply</button>
+          <button class="button" type="submit">Search</button>
           <a class="button secondary" href="/gallery">Reset</a>
         </div>
         <datalist id="person-options">{_render_datalist_options(person_options)}</datalist>
@@ -778,7 +687,6 @@ async def gallery_page(
       </div>
     </div>
     <section class="active-filters">
-      <span class="active-filters-title">Active filters</span>
       <div class="active-filters-list">{active_filter_summary}</div>
     </section>
     <div class="meta-bar">
@@ -793,7 +701,7 @@ async def gallery_page(
       {''.join(cards) if cards else '<article class="card"><div class="body"><p class="summary">No media matched the current filters.</p></div></article>'}
     </section>
     <nav class="pagination">
-      <span>Use filters to narrow the catalog without leaving the page.</span>
+      <span></span>
       <div class="actions">
         {_render_page_link('Previous', _page_url(request, page - 1), enabled=has_prev)}
         {_render_page_link('Next', _page_url(request, page + 1), enabled=has_next)}
