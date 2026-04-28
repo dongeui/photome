@@ -1,5 +1,6 @@
 """SQLAlchemy models."""
 
+from app.models.annotation import MediaAnnotation
 from app.models.asset import DerivedAsset
 from app.models.base import Base
 from app.models.face import Face
@@ -15,6 +16,7 @@ __all__ = [
     "DerivedAsset",
     "Face",
     "MediaAnalysisSignal",
+    "MediaAnnotation",
     "MediaEmbedding",
     "MediaFile",
     "MediaOCR",

@@ -5,11 +5,17 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Any, Optional
 
+from urllib.parse import parse_qs
+
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import RedirectResponse
+from sqlalchemy import delete
 
 from app.api.deps import require_state
 from app.api.serializers import serialize_media_file
 from app.models.asset import DerivedAsset
+from app.models.annotation import MediaAnnotation
+from app.models.tag import Tag
 from app.services.processing.registry import MediaCatalog
 
 
@@ -96,6 +102,7 @@ async def get_media(request: Request, file_id: str) -> dict[str, Any]:
         assets = session.query(DerivedAsset).filter(DerivedAsset.file_id == file_id).order_by(DerivedAsset.asset_kind).all()
         return {
             "item": serialize_media_file(media_file),
+            "annotation": _serialize_annotation(session.get(MediaAnnotation, file_id)),
             "tags": [
                 {
                     "id": tag.id,
@@ -128,6 +135,40 @@ async def get_media(request: Request, file_id: str) -> dict[str, Any]:
                 for asset in assets
             ],
         }
+
+
+@router.post("/{file_id}/annotation")
+async def update_media_annotation(request: Request, file_id: str):
+    database = require_state(request, "database")
+    raw_body = (await request.body()).decode("utf-8")
+    form = parse_qs(raw_body, keep_blank_values=True)
+    title = _form_value(form, "title")
+    description = _form_value(form, "description")
+    custom_tags = _parse_custom_tags(_form_value(form, "tags"))
+    next_url = _safe_next_url(_form_value(form, "next") or request.headers.get("referer"), file_id)
+
+    with database.session_factory() as session:
+        catalog = MediaCatalog(session)
+        media_file = catalog.get_media(file_id)
+        if media_file is None:
+            from fastapi import HTTPException, status
+
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media file not found")
+
+        annotation = session.get(MediaAnnotation, file_id)
+        if annotation is None and (title or description):
+            annotation = MediaAnnotation(file_id=file_id)
+            session.add(annotation)
+        if annotation is not None:
+            annotation.title = title or None
+            annotation.description = description or None
+
+        session.execute(delete(Tag).where(Tag.file_id == file_id, Tag.tag_type == "custom"))
+        for tag_value in custom_tags:
+            session.add(Tag(file_id=file_id, tag_type="custom", tag_value=tag_value))
+        session.commit()
+
+    return RedirectResponse(next_url, status_code=303)
 
 
 async def _list_media(
@@ -206,3 +247,33 @@ def _end_of_day(value: Optional[date]) -> Optional[datetime]:
     if value is None:
         return None
     return datetime.combine(value, time.max)
+
+
+def _serialize_annotation(annotation: MediaAnnotation | None) -> dict[str, str | None]:
+    if annotation is None:
+        return {"title": None, "description": None}
+    return {"title": annotation.title, "description": annotation.description}
+
+
+def _form_value(form: dict[str, list[str]], key: str) -> str:
+    values = form.get(key) or [""]
+    return values[0].strip()
+
+
+def _parse_custom_tags(value: str) -> list[str]:
+    seen: set[str] = set()
+    tags: list[str] = []
+    for raw_tag in value.replace("#", ",").replace(";", ",").split(","):
+        tag = raw_tag.strip()
+        normalized = tag.casefold()
+        if not tag or normalized in seen:
+            continue
+        seen.add(normalized)
+        tags.append(tag[:256])
+    return tags
+
+
+def _safe_next_url(value: str | None, file_id: str) -> str:
+    if value and value.startswith("/") and not value.startswith("//"):
+        return value
+    return f"/gallery#card-{file_id}"

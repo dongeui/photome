@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import Select, exists, false, func, or_, select
 
 from app.api.deps import require_state
+from app.models.annotation import MediaAnnotation
 from app.models.asset import DerivedAsset
 from app.models.media import MediaFile
 from app.models.tag import Tag
@@ -105,6 +106,7 @@ async def gallery_page(
             file_ids = list(session.scalars(ids_query.limit(PAGE_SIZE).offset(offset)))
 
         items: list[MediaFile] = []
+        annotation_map: dict[str, MediaAnnotation] = {}
         asset_map: dict[str, list[DerivedAsset]] = defaultdict(list)
         tag_map: dict[str, list[Tag]] = defaultdict(list)
         if file_ids:
@@ -130,16 +132,25 @@ async def gallery_page(
                 .order_by(Tag.tag_type.asc(), Tag.tag_value.asc())
             ):
                 tag_map[tag.file_id].append(tag)
+            for annotation in session.scalars(
+                select(MediaAnnotation).where(MediaAnnotation.file_id.in_(file_ids))
+            ):
+                annotation_map[annotation.file_id] = annotation
 
         person_options = _list_tag_values(session, PERSON_TAG_TYPES)
         place_options = _list_tag_values(session, PLACE_TAG_TYPES)
 
+    current_url = request.url.path
+    if request.url.query:
+        current_url += f"?{request.url.query}"
     cards = [
         _render_card(
             media_file=item,
             asset=_select_card_asset(asset_map.get(item.file_id, [])),
             tags=tag_map.get(item.file_id, []),
+            annotation=annotation_map.get(item.file_id),
             index=index,
+            next_url=f"{current_url}#card-{item.file_id}",
         )
         for index, item in enumerate(items)
     ]
@@ -546,6 +557,47 @@ async def gallery_page(
       background: rgba(24, 32, 38, 0.07);
       border: 1px solid rgba(20, 32, 40, 0.06);
     }}
+    .edit-panel {{
+      border-top: 1px solid rgba(20, 32, 40, 0.08);
+      padding-top: 8px;
+      font-family: "Inter", "Helvetica Neue", sans-serif;
+    }}
+    .edit-panel summary {{
+      color: var(--accent-deep);
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }}
+    .edit-form {{
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .edit-form input, .edit-form textarea {{
+      width: 100%;
+      min-height: 36px;
+      padding: 8px 10px;
+      border: 1px solid rgba(20, 32, 40, 0.12);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--text);
+      font: 500 0.84rem "Inter", "Helvetica Neue", sans-serif;
+    }}
+    .edit-form textarea {{
+      min-height: 66px;
+      resize: vertical;
+    }}
+    .edit-form button {{
+      justify-self: start;
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--text);
+      color: white;
+      font: 700 0.82rem "Inter", "Helvetica Neue", sans-serif;
+      cursor: pointer;
+    }}
     .pagination {{
       display: flex;
       justify-content: space-between;
@@ -808,7 +860,15 @@ def _select_card_asset(assets: list[DerivedAsset]) -> DerivedAsset | None:
     )
 
 
-def _render_card(*, media_file: MediaFile, asset: DerivedAsset | None, tags: list[Tag], index: int) -> str:
+def _render_card(
+    *,
+    media_file: MediaFile,
+    asset: DerivedAsset | None,
+    tags: list[Tag],
+    annotation: MediaAnnotation | None,
+    index: int,
+    next_url: str,
+) -> str:
     eager = index < 6
     loading_attr = "eager" if eager else "lazy"
     fetchpriority_attr = "high" if index < 4 else "auto"
@@ -820,6 +880,9 @@ def _render_card(*, media_file: MediaFile, asset: DerivedAsset | None, tags: lis
         if asset is not None
         else f'<div class="placeholder">{escape(media_file.media_kind)}</div>'
     )
+    title = _display_title(media_file, annotation)
+    description = _display_description(media_file, tags, annotation)
+    custom_tags = ", ".join(tag.tag_value for tag in tags if tag.tag_type == "custom")
     tag_html = "".join(
         f'<span class="tag">{escape(tag.tag_type)}: {escape(tag.tag_value)}</span>'
         for tag in tags[:4]
@@ -828,12 +891,12 @@ def _render_card(*, media_file: MediaFile, asset: DerivedAsset | None, tags: lis
     thumb_href = f"#{preview_id}" if asset is not None else "#gallery"
     lightbox_html = (
         f"""
-      <div id="{preview_id}" class="lightbox" aria-label="{escape(media_file.filename)} preview">
+      <div id="{preview_id}" class="lightbox" aria-label="{escape(title)} preview">
         <a class="lightbox-backdrop" href="#gallery" aria-label="Close preview"></a>
         <div class="lightbox-panel">
-          <img src="/gallery/assets/{asset.id}" alt="{escape(media_file.filename)} enlarged preview">
+          <img src="/gallery/assets/{asset.id}" alt="{escape(title)} enlarged preview">
           <div class="lightbox-caption">
-            <span>{escape(media_file.filename)}</span>
+            <span>{escape(title)}</span>
             <a class="lightbox-close" href="#gallery">Close</a>
           </div>
         </div>
@@ -843,21 +906,43 @@ def _render_card(*, media_file: MediaFile, asset: DerivedAsset | None, tags: lis
         else ""
     )
     return f"""
-      <article class="card">
-        <a class="thumb" href="{thumb_href}" aria-label="Open {escape(media_file.filename)} preview">{image_html}</a>
+      <article id="card-{escape(media_file.file_id)}" class="card">
+        <a class="thumb" href="{thumb_href}" aria-label="Open {escape(title)} preview">{image_html}</a>
         <div class="body">
           <div class="row">
-            <h2 class="filename">{escape(media_file.filename)}</h2>
+            <h2 class="filename">{escape(title)}</h2>
             <span class="kind">{escape(media_file.media_kind)}</span>
           </div>
           <p class="detail">{escape(_display_date(media_file))}</p>
-          <p class="summary">{escape(_summary_text(media_file, tags))}</p>
+          <p class="summary">{escape(description)}</p>
           <p class="pathline">{escape(media_file.relative_path)}</p>
-          <p class="tags">{tag_html or '<span class="tag">no tags</span>'}</p>
+          {f'<p class="tags">{tag_html}</p>' if tag_html else ''}
+          <details class="edit-panel">
+            <summary>Edit name, description, tags</summary>
+            <form class="edit-form" method="post" action="/media/{escape(media_file.file_id)}/annotation">
+              <input name="title" value="{escape(annotation.title if annotation and annotation.title else '')}" placeholder="Display name">
+              <textarea name="description" placeholder="Description">{escape(annotation.description if annotation and annotation.description else '')}</textarea>
+              <input name="tags" value="{escape(custom_tags)}" placeholder="Tags, comma separated">
+              <input type="hidden" name="next" value="{escape(next_url)}">
+              <button type="submit">Save</button>
+            </form>
+          </details>
         </div>
       </article>
       {lightbox_html}
     """
+
+
+def _display_title(media_file: MediaFile, annotation: MediaAnnotation | None) -> str:
+    if annotation and annotation.title:
+        return annotation.title
+    return media_file.filename
+
+
+def _display_description(media_file: MediaFile, tags: list[Tag], annotation: MediaAnnotation | None) -> str:
+    if annotation and annotation.description:
+        return annotation.description
+    return _summary_text(media_file, tags)
 
 
 def _summary_text(media_file: MediaFile, tags: list[Tag]) -> str:

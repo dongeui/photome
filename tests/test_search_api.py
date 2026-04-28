@@ -64,6 +64,43 @@ def test_search_finds_scanned_media_by_filename_and_semantic_rows_exist(
         assert session.get(MediaAnalysisSignal, file_id) is not None
 
 
+def test_media_annotation_updates_display_name_description_and_custom_tags(
+    client: TestClient,
+    source_root: Path,
+) -> None:
+    create_image(source_root / "vacation-receipt.jpg")
+    scan_twice(client)
+    item = client.get("/media", params={"q": "receipt"}).json()["items"][0]
+
+    response = client.post(
+        f"/media/{item['file_id']}/annotation",
+        data={
+            "title": "Trip receipt",
+            "description": "Dinner receipt from the family trip.",
+            "tags": "receipt, family, receipt",
+            "next": "/gallery?q=receipt",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    detail = client.get(f"/media/{item['file_id']}").json()
+    assert detail["annotation"] == {
+        "title": "Trip receipt",
+        "description": "Dinner receipt from the family trip.",
+    }
+    assert {
+        (tag["tag_type"], tag["tag_value"])
+        for tag in detail["tags"]
+        if tag["tag_type"] == "custom"
+    } == {("custom", "receipt"), ("custom", "family")}
+
+    gallery = client.get("/gallery", params={"q": "receipt"}).text
+    assert "Trip receipt" in gallery
+    assert "Dinner receipt from the family trip." in gallery
+    assert "no tags" not in gallery
+
+
 def scan_twice(client: TestClient) -> tuple[dict, dict]:
     first = client.post("/scan").json()
     time.sleep(SCAN_DELAY_SECONDS)
