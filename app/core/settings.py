@@ -91,6 +91,7 @@ class AppSettings:
     semantic_ocr_version: str
     semantic_caption_version: str
     semantic_embedding_version: str
+    semantic_auto_tag_version: str
     semantic_search_version: str
 
     @property
@@ -167,5 +168,6 @@ def load_settings() -> AppSettings:
         semantic_ocr_version=_env("PHOTOMINE_SEMANTIC_OCR_VERSION", "ocr-v1"),
         semantic_caption_version=_env("PHOTOMINE_SEMANTIC_CAPTION_VERSION", "caption-v1"),
         semantic_embedding_version=_env("PHOTOMINE_SEMANTIC_EMBEDDING_VERSION", "embedding-v1"),
+        semantic_auto_tag_version=_env("PHOTOMINE_SEMANTIC_AUTO_TAG_VERSION", "auto-v1"),
         semantic_search_version=_env("PHOTOMINE_SEMANTIC_SEARCH_VERSION", "search-v1"),
     )

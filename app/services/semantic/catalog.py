@@ -10,7 +10,8 @@ from typing import Iterable
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models.semantic import MediaAnalysisSignal, MediaEmbedding, MediaOCR, MediaOCRBlock, MediaOCRGram
+from app.core.contracts import MediaTagInput
+from app.models.semantic import MediaAnalysisSignal, MediaAutoTagState, MediaEmbedding, MediaOCR, MediaOCRBlock, MediaOCRGram
 from app.services.ocr import OCRBlock, OCRResult
 
 
@@ -85,6 +86,26 @@ class SemanticCatalog:
             row.embedding_ref = embedding_ref
             row.dimensions = dimensions
             row.checksum = checksum
+        self._session.flush()
+        return row
+
+    def upsert_auto_tag_state(
+        self,
+        file_id: str,
+        *,
+        tags: list[MediaTagInput],
+        version: str,
+        source: str = "thumb+clip",
+    ) -> MediaAutoTagState:
+        payload = [{"type": tag.tag_type, "value": tag.tag_value} for tag in tags]
+        row = self._session.get(MediaAutoTagState, file_id)
+        if row is None:
+            row = MediaAutoTagState(file_id=file_id, version=version, source=source, tags_json=payload)
+            self._session.add(row)
+        else:
+            row.version = version
+            row.source = source
+            row.tags_json = payload
         self._session.flush()
         return row
 

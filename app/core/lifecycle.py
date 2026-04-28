@@ -80,6 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         semantic_clip_enabled=settings.semantic_clip_enabled,
         semantic_ocr_version=settings.semantic_ocr_version,
         semantic_embedding_version=settings.semantic_embedding_version,
+        semantic_auto_tag_version=settings.semantic_auto_tag_version,
     )
     scheduler = SchedulerService(settings, pipeline)
 

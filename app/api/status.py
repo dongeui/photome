@@ -272,6 +272,7 @@ async def dashboard(request: Request) -> HTMLResponse:
           <span class="pill"><strong>OCR</strong> <code>{escape(semantic['versions']['ocr'])}</code></span>
           <span class="pill"><strong>Caption</strong> <code>{escape(semantic['versions']['caption'])}</code></span>
           <span class="pill"><strong>Embedding</strong> <code>{escape(semantic['versions']['embedding'])}</code></span>
+          <span class="pill"><strong>Auto Tags</strong> <code>{escape(semantic['versions']['auto_tags'])}</code></span>
           <span class="pill"><strong>Search</strong> <code>{escape(semantic['versions']['search'])}</code></span>
         </div>
       </article>
@@ -349,6 +350,7 @@ async def status(request: Request) -> dict[str, Any]:
                     "ocr": settings.semantic_ocr_version,
                     "caption": settings.semantic_caption_version,
                     "embedding": settings.semantic_embedding_version,
+                    "auto_tags": settings.semantic_auto_tag_version,
                     "search": settings.semantic_search_version,
                 },
                 "runtime": {

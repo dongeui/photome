@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -76,3 +76,15 @@ class MediaEmbedding(Base):
     dimensions: Mapped[int] = mapped_column(nullable=False)
     checksum: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class MediaAutoTagState(Base):
+    __tablename__ = "media_auto_tag_states"
+
+    file_id: Mapped[str] = mapped_column(ForeignKey("media_files.file_id", ondelete="CASCADE"), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="thumb+clip")
+    tags_json: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    media_file = relationship("MediaFile")

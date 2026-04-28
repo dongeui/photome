@@ -86,6 +86,7 @@ class ProcessingPipeline:
         semantic_clip_enabled: bool = False,
         semantic_ocr_version: str = "ocr-v1",
         semantic_embedding_version: str = "embedding-v1",
+        semantic_auto_tag_version: str = "auto-v1",
     ) -> None:
         self._session_factory = session_factory
         self._scanner = scanner
@@ -102,6 +103,7 @@ class ProcessingPipeline:
         self._semantic_clip_enabled = semantic_clip_enabled
         self._semantic_ocr_version = semantic_ocr_version
         self._semantic_embedding_version = semantic_embedding_version
+        self._semantic_auto_tag_version = semantic_auto_tag_version
 
     def submit_scan_job(self, *, full_scan: bool = False, run_now: bool = True, trigger: str = "manual") -> PipelineSummary:
         with self._session_factory() as session:
@@ -322,7 +324,7 @@ class ProcessingPipeline:
     def _materialize_image_semantics(self, session: Session, media_file: MediaFile) -> dict[str, Any]:
         semantic_catalog = SemanticCatalog(session)
         result: dict[str, Any] = {}
-        source_path = Path(media_file.current_path)
+        source_path = self._analysis_source_path(media_file)
         ocr_text = ""
 
         if self._semantic_ocr_enabled:
@@ -352,6 +354,11 @@ class ProcessingPipeline:
                 )
 
         generated_tags = auto_tags.merge_auto_tags(signal_tags, embedding_tags)
+        semantic_catalog.upsert_auto_tag_state(
+            media_file.file_id,
+            tags=generated_tags,
+            version=self._semantic_auto_tag_version,
+        )
         if generated_tags:
             result["_auto_tag_inputs"] = generated_tags
             result["auto_tags"] = [
@@ -360,6 +367,12 @@ class ProcessingPipeline:
             ]
 
         return result
+
+    def _analysis_source_path(self, media_file: MediaFile) -> Path:
+        thumbnail_path = self._derived_root / self._clip_source_thumbnail_relative_path(media_file.file_id)
+        if thumbnail_path.is_file():
+            return thumbnail_path
+        return Path(media_file.current_path)
 
     def _materialize_clip_embedding(self, media_file: MediaFile) -> dict[str, Any] | None:
         try:
