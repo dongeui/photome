@@ -89,6 +89,22 @@ async def trigger_semantic_backfill(
     return result
 
 
+@router.post("/scan/semantic-backfill/async", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_semantic_backfill_async(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    batch_size: int = Query(default=50, ge=1, le=500),
+) -> dict[str, Any]:
+    pipeline = require_state(request, "pipeline")
+    summary = pipeline.submit_semantic_backfill_job(
+        batch_size=batch_size,
+        run_now=False,
+        trigger="api-async",
+    )
+    background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
+    return {"job": asdict(summary)}
+
+
 @router.post("/scan/semantic-maintenance")
 async def trigger_semantic_maintenance(
     request: Request,
@@ -97,6 +113,22 @@ async def trigger_semantic_maintenance(
     """Refresh Phase 2 search documents for only stale or missing rows."""
     pipeline = require_state(request, "pipeline")
     return pipeline.run_semantic_maintenance(batch_size=batch_size)
+
+
+@router.post("/scan/semantic-maintenance/async", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_semantic_maintenance_async(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    batch_size: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    pipeline = require_state(request, "pipeline")
+    summary = pipeline.submit_semantic_maintenance_job(
+        batch_size=batch_size,
+        run_now=False,
+        trigger="api-async",
+    )
+    background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
+    return {"job": asdict(summary)}
 
 
 def _parse_source_roots(*, source_root: Optional[List[str]], source_roots: Optional[str]) -> tuple[Path, ...] | None:

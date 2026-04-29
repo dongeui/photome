@@ -173,6 +173,83 @@ class ProcessingPipeline:
             session.commit()
             return self._to_summary(job)
 
+    def submit_semantic_backfill_job(
+        self,
+        *,
+        batch_size: int = 50,
+        run_now: bool = True,
+        trigger: str = "manual",
+    ) -> PipelineSummary:
+        payload: dict[str, Any] = {"batch_size": batch_size, "trigger": trigger}
+        with self._session_factory() as session:
+            job = ProcessingJob(
+                job_kind=ProcessingJobKind.SEMANTIC_BACKFILL.value,
+                status=ProcessingJobState.QUEUED.value,
+                payload_json=payload,
+                attempts=0,
+            )
+            session.add(job)
+            session.flush()
+
+            if run_now:
+                try:
+                    self._run_semantic_job(session, job, batch_size=batch_size, mode="backfill")
+                except Exception:
+                    session.commit()
+                    return self._to_summary(job)
+
+            session.commit()
+            return self._to_summary(job)
+
+    def submit_semantic_maintenance_job(
+        self,
+        *,
+        batch_size: int = 100,
+        run_now: bool = True,
+        trigger: str = "manual",
+    ) -> PipelineSummary:
+        payload: dict[str, Any] = {"batch_size": batch_size, "trigger": trigger}
+        with self._session_factory() as session:
+            job = ProcessingJob(
+                job_kind=ProcessingJobKind.SEMANTIC_MAINTENANCE.value,
+                status=ProcessingJobState.QUEUED.value,
+                payload_json=payload,
+                attempts=0,
+            )
+            session.add(job)
+            session.flush()
+
+            if run_now:
+                try:
+                    self._run_semantic_job(session, job, batch_size=batch_size, mode="maintenance")
+                except Exception:
+                    session.commit()
+                    return self._to_summary(job)
+
+            session.commit()
+            return self._to_summary(job)
+
+    def run_semantic_job(self, job_id: str) -> PipelineSummary:
+        with self._session_factory() as session:
+            job = session.get(ProcessingJob, job_id)
+            if job is None:
+                raise ValueError(f"Unknown job_id: {job_id}")
+            payload = job.payload_json or {}
+            batch_size = int(payload.get("batch_size") or 100)
+            if job.job_kind == ProcessingJobKind.SEMANTIC_BACKFILL.value:
+                mode = "backfill"
+            elif job.job_kind == ProcessingJobKind.SEMANTIC_MAINTENANCE.value:
+                mode = "maintenance"
+            else:
+                raise ValueError(f"Job {job_id} is not a semantic job")
+            try:
+                self._run_semantic_job(session, job, batch_size=batch_size, mode=mode)
+            except Exception:
+                session.commit()
+                return self._to_summary(job)
+            session.commit()
+            return self._to_summary(job)
+
     def rebuild_media_assets(self, file_id: str) -> PipelineSummary:
         with self._session_factory() as session:
             job = ProcessingJob(
@@ -322,6 +399,44 @@ class ProcessingPipeline:
                 }
         finally:
             self._semantic_maintenance_lock.release()
+
+    def _run_semantic_job(
+        self,
+        session: Session,
+        job: ProcessingJob,
+        *,
+        batch_size: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        now = datetime.utcnow()
+        job.status = ProcessingJobState.RUNNING.value
+        job.started_at = job.started_at or now
+        job.attempts = (job.attempts or 0) + 1
+        job.error_stage = None
+        job.error_message = None
+        session.flush()
+
+        try:
+            if mode == "backfill":
+                result = self.run_semantic_backfill(batch_size=batch_size)
+            elif mode == "maintenance":
+                result = self.run_semantic_maintenance(batch_size=batch_size)
+            else:
+                raise ValueError(f"Unknown semantic job mode: {mode}")
+        except Exception as exc:
+            logger.exception("semantic job failed", extra={"job_id": job.id, "mode": mode})
+            job.status = ProcessingJobState.FAILED.value
+            job.error_stage = f"semantic_{mode}"
+            job.error_message = str(exc)
+            job.finished_at = datetime.utcnow()
+            session.flush()
+            raise
+
+        job.status = ProcessingJobState.SUCCEEDED.value
+        job.result_json = result
+        job.finished_at = datetime.utcnow()
+        session.flush()
+        return result
 
     def status_snapshot(self) -> dict[str, Any]:
         with self._session_factory() as session:

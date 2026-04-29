@@ -231,6 +231,16 @@ async def dashboard(request: Request) -> HTMLResponse:
       font-size: .9rem;
       font-weight: 600;
     }}
+    .scan-actions select,
+    .scan-actions input[type="number"] {{
+      min-height: 36px;
+      padding: 7px 10px;
+      border: 1px solid rgba(19,32,42,0.14);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.9);
+      color: var(--text);
+      font: .88rem "Inter", "Helvetica Neue", sans-serif;
+    }}
     .scan-actions button {{
       min-height: 40px;
       padding: 9px 14px;
@@ -414,8 +424,8 @@ async def dashboard(request: Request) -> HTMLResponse:
         </form>
       </article>
 
-      <article class="card">
-        <h2>Phase 2 Semantic Loop</h2>
+      <article class="card scan-card" id="phase2-card">
+        <h2 class="scan-title">Phase 2 Semantic Loop</h2>
         <p class="sub">Catalog-driven semantic maintenance for tags, OCR, captions, embeddings, and search versions.</p>
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if semantic['scheduler_enabled'] else 'status-warn'}">{escape(str(semantic['scheduler_enabled']))}</span></span>
@@ -427,6 +437,23 @@ async def dashboard(request: Request) -> HTMLResponse:
           <div class="row"><span>Last semantic maintenance</span><span>{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
           <div class="row"><span>Next semantic maintenance</span><span>{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
         </div>
+        <form class="scan-form" id="phase2-semantic-form">
+          <div class="scan-actions">
+            <button type="submit" id="phase2-semantic-button">Run Phase 2 Job</button>
+            <label>
+              Mode
+              <select id="phase2-semantic-mode" name="mode">
+                <option value="maintenance" selected>maintenance</option>
+                <option value="backfill">backfill</option>
+              </select>
+            </label>
+            <label>
+              Batch size
+              <input type="number" id="phase2-batch-size" name="batch_size" min="1" max="1000" value="100">
+            </label>
+          </div>
+          <pre class="scan-result" id="phase2-semantic-result" aria-live="polite"></pre>
+        </form>
       </article>
 
       <article class="card full">
@@ -486,6 +513,10 @@ async def dashboard(request: Request) -> HTMLResponse:
     const scanResult = document.getElementById("phase1-scan-result");
     const scanCard = document.getElementById("phase1-card");
     const scanButton = document.getElementById("phase1-scan-button");
+    const semanticForm = document.getElementById("phase2-semantic-form");
+    const semanticResult = document.getElementById("phase2-semantic-result");
+    const semanticCard = document.getElementById("phase2-card");
+    const semanticButton = document.getElementById("phase2-semantic-button");
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     function renderScanJob(job) {{
       const summary = job?.result?.summary || {{}};
@@ -521,6 +552,27 @@ async def dashboard(request: Request) -> HTMLResponse:
         await sleep(1200);
       }}
     }}
+    function renderSemanticJob(job) {{
+      const result = job?.result || {{}};
+      const lines = [
+        `status: ${{job?.status || "unknown"}}`,
+      ];
+      if (job?.status === "queued" || job?.status === "running") {{
+        lines.push(`job: ${{job?.job_id || ""}}`);
+        if (job?.started_at) lines.push(`started: ${{job.started_at}}`);
+        return lines.join("\\n");
+      }}
+      lines.push(
+        `pending: ${{result.pending ?? 0}}`,
+        `succeeded: ${{result.succeeded ?? 0}}`,
+        `failed: ${{result.failed ?? 0}}`,
+      );
+      if (result.has_more !== undefined) lines.push(`has_more: ${{result.has_more}}`);
+      if (result.version) lines.push(`version: ${{result.version}}`);
+      if (result.reason) lines.push(`reason: ${{result.reason}}`);
+      if (job?.error_message) lines.push(`error: ${{job.error_message}}`);
+      return lines.join("\\n");
+    }}
     scanForm?.addEventListener("submit", async (event) => {{
       event.preventDefault();
       scanResult.classList.add("visible");
@@ -543,6 +595,31 @@ async def dashboard(request: Request) -> HTMLResponse:
       }} finally {{
         scanCard.classList.remove("is-running");
         scanButton.disabled = false;
+      }}
+    }});
+    semanticForm?.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      semanticResult.classList.add("visible");
+      semanticCard.classList.add("is-running");
+      semanticButton.disabled = true;
+      semanticResult.textContent = "Starting semantic job...";
+      const mode = document.getElementById("phase2-semantic-mode").value;
+      const batchSize = document.getElementById("phase2-batch-size").value;
+      const params = new URLSearchParams();
+      if (batchSize.trim()) params.set("batch_size", batchSize);
+      const endpoint = mode === "backfill" ? "/scan/semantic-backfill/async" : "/scan/semantic-maintenance/async";
+      try {{
+        const response = await fetch(`${{endpoint}}?${{params.toString()}}`, {{ method: "POST" }});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        semanticResult.textContent = renderSemanticJob(payload.job);
+        const job = await pollScanJob(payload.job.job_id);
+        semanticResult.textContent = renderSemanticJob(job);
+      }} catch (error) {{
+        semanticResult.textContent = `error: ${{error.message}}`;
+      }} finally {{
+        semanticCard.classList.remove("is-running");
+        semanticButton.disabled = false;
       }}
     }});
 

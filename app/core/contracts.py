@@ -25,6 +25,8 @@ class DerivedAssetKind(str, Enum):
 
 class ProcessingJobKind(str, Enum):
     SCAN = "scan"
+    SEMANTIC_BACKFILL = "semantic_backfill"
+    SEMANTIC_MAINTENANCE = "semantic_maintenance"
     THUMBNAIL = "thumbnail"
     KEYFRAME = "keyframe"
     PIPELINE = "pipeline"
