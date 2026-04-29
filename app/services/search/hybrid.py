@@ -268,7 +268,14 @@ class HybridSearchService:
         merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
 
-        # Zero-result fallback: loosen date filter and retry once
+        meta: dict = {
+            "effective_mode": effective_mode,
+            "intent_reason": intent_reason,
+            "query_plan": plan.to_meta(),
+            "weight_overrides": weight_overrides or {},
+        }
+
+        # Zero-result fallback 1: loosen date filter and retry once
         if not final and (plan.date_from is not None) and not debug:
             loosened = self._loosened_date_fallback(
                 query=query,
@@ -280,12 +287,23 @@ class HybridSearchService:
             if loosened:
                 final = loosened
                 meta["fallback"] = "date_relaxed"
-        meta: dict = {
-            "effective_mode": effective_mode,
-            "intent_reason": intent_reason,
-            "query_plan": plan.to_meta(),
-            "weight_overrides": weight_overrides or {},
-        }
+
+        # Zero-result fallback 2: fuzzy-correct query tokens via DB tag vocabulary
+        if not final and not debug and tag_vocab is not None:
+            corrected = fuzzy_correct_query(cleaned, tag_vocab)
+            if corrected and corrected != cleaned:
+                corrected_results, _ = self.search_with_meta(
+                    corrected,
+                    limit=limit,
+                    place_filter=place_filter,
+                    mode=mode,
+                    debug=False,
+                    weight_overrides=weight_overrides,
+                )
+                if corrected_results:
+                    final = corrected_results
+                    meta["fallback"] = "fuzzy_corrected"
+                    meta["fuzzy_corrected_query"] = corrected
         if debug:
             fused_for_debug = debug_candidates or merged
             meta["debug"] = {
@@ -868,6 +886,73 @@ def remove_near_duplicates(
         # else: a better result for this burst is already kept — skip
 
     return kept
+
+
+def fuzzy_correct_query(query: str, tag_vocab: "object") -> str | None:
+    """Attempt to correct query tokens using character bigram Jaccard against DB tags.
+
+    Dynamically reads the user's own TagVocabulary so no hardcoded dictionary is needed.
+    Returns a corrected query string if any token was improved (similarity >= 0.5),
+    otherwise None.
+
+    Skipped when:
+    - tag_vocab has no tags (library not yet indexed)
+    - all tokens already match known tags exactly
+    - tag vocabulary is very large (>2000 tags) to avoid O(n*m) slowness
+    """
+    from app.services.search.tokenizer import korean_nouns
+
+    all_tags = getattr(tag_vocab, "all_tags", frozenset())
+    if not all_tags or len(all_tags) > 2000:
+        return None
+
+    tokens = korean_nouns(query)
+    if not tokens:
+        return None
+
+    corrected: list[str] = []
+    changed = False
+
+    for token in tokens:
+        if len(token) < 2 or token in all_tags:
+            corrected.append(token)
+            continue
+
+        best_tag, best_sim = _best_bigram_match(token, all_tags)
+        if best_tag and best_sim >= 0.5:
+            corrected.append(best_tag)
+            changed = True
+        else:
+            corrected.append(token)
+
+    return " ".join(corrected) if changed else None
+
+
+def _best_bigram_match(token: str, tags: frozenset) -> tuple[str | None, float]:
+    """Return (best_tag, similarity) using character bigram Jaccard index."""
+    tok_bi = {token[i:i + 2] for i in range(len(token) - 1)}
+    if not tok_bi:
+        return None, 0.0
+
+    best_tag: str | None = None
+    best_sim = 0.0
+    max_len_diff = max(2, len(token))  # ignore tags whose length differs too much
+
+    for tag in tags:
+        if abs(len(tag) - len(token)) > max_len_diff:
+            continue
+        tag_bi = {tag[i:i + 2] for i in range(len(tag) - 1)}
+        if not tag_bi:
+            continue
+        union = len(tok_bi | tag_bi)
+        if union == 0:
+            continue
+        sim = len(tok_bi & tag_bi) / union
+        if sim > best_sim:
+            best_sim = sim
+            best_tag = tag
+
+    return best_tag, best_sim
 
 
 def _is_coordinate_tag(value: str) -> bool:
