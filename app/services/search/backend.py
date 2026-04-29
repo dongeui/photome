@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.face import Face
 from app.models.annotation import MediaAnnotation
 from app.models.media import MediaFile
-from app.models.semantic import MediaAnalysisSignal, MediaEmbedding, MediaOCR
+from app.models.semantic import MediaAnalysisSignal, MediaEmbedding, MediaOCR, MediaOCRGram
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
 
@@ -20,8 +21,49 @@ FACE_HINTS = {
     "face", "faces", "person", "people", "portrait", "selfie",
     "woman", "women", "female", "girl", "baby", "infant", "toddler", "child", "kid",
     "얼굴", "사람", "인물", "셀카", "남자", "여자", "여성", "아기", "애기", "아이", "어린이",
+    "엄마", "아빠", "가족", "친구", "커플",
 }
 TEXT_HINTS = {"text", "ocr", "document", "receipt", "screen", "텍스트", "글씨", "문서", "영수증", "화면", "스크린샷"}
+
+# Korean ↔ English tag synonyms: searching either side will also match the other
+TAG_SYNONYMS: dict[str, set[str]] = {
+    "baby": {"아기", "애기", "infant", "newborn", "toddler"},
+    "아기": {"baby", "infant", "애기", "toddler"},
+    "person": {"사람", "얼굴", "인물", "portrait"},
+    "얼굴": {"face", "person", "portrait", "인물"},
+    "receipt": {"영수증", "document"},
+    "영수증": {"receipt", "document"},
+    "screenshot": {"스크린샷", "screen", "화면"},
+    "스크린샷": {"screenshot", "screen", "화면"},
+    "food": {"음식", "meal"},
+    "음식": {"food", "meal"},
+    "outdoor": {"야외", "자연", "nature"},
+    "야외": {"outdoor", "nature"},
+    "beach": {"바다", "해변", "sea", "ocean"},
+    "바다": {"beach", "sea", "ocean"},
+    "travel": {"여행", "trip", "vacation"},
+    "여행": {"travel", "trip", "vacation"},
+    "wedding": {"결혼식", "결혼"},
+    "결혼식": {"wedding", "결혼"},
+    "birthday": {"생일", "celebration"},
+    "생일": {"birthday", "celebration"},
+    "night": {"야경", "야간"},
+    "야경": {"night", "야간"},
+    "celebration": {"파티", "생일", "party", "birthday"},
+    "파티": {"party", "celebration", "birthday"},
+    "dog": {"강아지", "puppy", "멍멍이"},
+    "강아지": {"dog", "puppy"},
+    "cat": {"고양이", "kitten"},
+    "고양이": {"cat", "kitten"},
+    "mountain": {"산", "등산", "hiking"},
+    "산": {"mountain", "hiking", "등산"},
+    "cake": {"케이크", "birthday"},
+    "케이크": {"cake", "birthday"},
+    "sunset": {"일몰", "노을"},
+    "일몰": {"sunset", "노을"},
+    "vehicle": {"차", "자동차", "car"},
+    "car": {"차", "자동차", "vehicle"},
+}
 
 
 class SqlAlchemyHybridSearchBackend:
@@ -31,7 +73,7 @@ class SqlAlchemyHybridSearchBackend:
 
     def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
         pattern = _like_pattern(query)
-        statement = (
+        main_statement = (
             select(MediaFile, MediaOCR, MediaAnalysisSignal)
             .join(MediaOCR, MediaOCR.file_id == MediaFile.file_id)
             .outerjoin(MediaAnalysisSignal, MediaAnalysisSignal.file_id == MediaFile.file_id)
@@ -41,7 +83,9 @@ class SqlAlchemyHybridSearchBackend:
             .limit(max(1, limit * 4))
         )
         rows = []
-        for media_file, ocr, analysis in self._session.execute(statement):
+        seen_ids: set[str] = set()
+        for media_file, ocr, analysis in self._session.execute(main_statement):
+            seen_ids.add(media_file.file_id)
             rows.append(
                 self._result_dict(
                     media_file,
@@ -51,7 +95,45 @@ class SqlAlchemyHybridSearchBackend:
                     ocr_match_kind=_ocr_match_kind(query, ocr.text_content),
                 )
             )
+
+        # Supplement with n-gram index results for Korean text when main results are few
+        grams = _korean_2grams(query)
+        if grams and len(rows) < limit:
+            gram_file_ids = self._ngram_file_ids(grams, exclude=seen_ids, limit=limit * 2)
+            if gram_file_ids:
+                ngram_statement = (
+                    select(MediaFile, MediaOCR, MediaAnalysisSignal)
+                    .join(MediaOCR, MediaOCR.file_id == MediaFile.file_id)
+                    .outerjoin(MediaAnalysisSignal, MediaAnalysisSignal.file_id == MediaFile.file_id)
+                    .where(MediaFile.file_id.in_(gram_file_ids))
+                    .where(MediaFile.status != "missing")
+                )
+                for media_file, ocr, analysis in self._session.execute(ngram_statement):
+                    rows.append(
+                        self._result_dict(
+                            media_file,
+                            ocr=ocr,
+                            analysis=analysis,
+                            match_reason="ocr",
+                            ocr_match_kind="ngram",
+                        )
+                    )
+
         return rows[:limit]
+
+    def _ngram_file_ids(self, grams: list[str], *, exclude: set[str], limit: int) -> list[str]:
+        statement = (
+            select(MediaOCRGram.file_id, func.count().label("hit_count"))
+            .where(MediaOCRGram.gram.in_(grams))
+            .group_by(MediaOCRGram.file_id)
+            .order_by(func.count().desc())
+            .limit(limit)
+        )
+        return [
+            file_id
+            for file_id, _ in self._session.execute(statement)
+            if file_id not in exclude
+        ]
 
     def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]:
         tagged = self._tagged_shadow_results(query, limit=limit)
@@ -95,12 +177,19 @@ class SqlAlchemyHybridSearchBackend:
         if not lowered:
             return []
 
+        # Build the set of tag values to search: exact match + synonyms
+        search_values = {lowered} | TAG_SYNONYMS.get(lowered, set())
+        # Also check each token of a multi-word query
+        for token in lowered.split():
+            search_values |= TAG_SYNONYMS.get(token, set())
+
         exact_statement = (
-            select(MediaFile)
+            select(MediaFile, Tag.tag_value)
             .join(Tag, Tag.file_id == MediaFile.file_id)
             .where(MediaFile.status != "missing")
-            .where(func.lower(Tag.tag_value) == lowered)
+            .where(func.lower(Tag.tag_value).in_(list(search_values)))
             .order_by(
+                (func.lower(Tag.tag_value) == lowered).desc(),
                 (Tag.tag_type == "auto").desc(),
                 (Tag.tag_type == "custom").desc(),
                 MediaFile.exif_datetime.desc().nullslast(),
@@ -109,11 +198,16 @@ class SqlAlchemyHybridSearchBackend:
             .limit(max(1, limit))
         )
         results = []
-        for media_file in self._session.scalars(exact_statement):
+        seen: set[str] = set()
+        for media_file, matched_tag_value in self._session.execute(exact_statement):
+            if media_file.file_id in seen:
+                continue
+            seen.add(media_file.file_id)
             ocr = self._session.get(MediaOCR, media_file.file_id)
             analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
             result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="tag")
-            result["tag_exact_match"] = True
+            result["tag_exact_match"] = matched_tag_value.casefold() == lowered
+            result["matched_tag"] = matched_tag_value
             results.append(result)
         return results
 
@@ -293,3 +387,11 @@ def _ocr_match_kind(query: str, text: str) -> str | None:
     if tokens and all(token in lowered_text for token in tokens):
         return "word"
     return None
+
+
+def _korean_2grams(text: str) -> list[str]:
+    compact = re.sub(r"\s+", "", text)
+    chars = [ch for ch in compact if "가" <= ch <= "힣"]
+    return list(dict.fromkeys(
+        "".join(chars[i: i + 2]) for i in range(max(0, len(chars) - 1))
+    ))
