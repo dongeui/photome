@@ -1,5 +1,5 @@
 # Product History
-updated 2026-04-29 (세션 3)
+updated 2026-04-29 (세션 4)
 
 ## 2026-04-22
 
@@ -141,3 +141,60 @@ updated 2026-04-29 (세션 3)
 `app/services/search/`: hybrid.py, backend.py  
 `app/models/`: semantic.py, __init__.py  
 `app/api/`: search.py
+
+## 2026-04-29 (세션 4) — 검색 정확도 고도화
+
+목표: "작년에 가족이랑 제주도갔던사진" 같은 복합 자연어 쿼리의 검색 정확도 개선.
+심층 분석(탐구) → 8개 항목 실행.
+
+### Fix-A: 겨울 날짜 역전 버그
+- `query_translate.py`: "작년 겨울" → `(2025-12-01, 2025-02-28)` 역순 반환 버그 수정
+- 겨울이 연도 경계를 넘을 때 start_year = ref_year - 1 로 처리
+- 수정 후: "작년 겨울" → `(2024-12-01, 2025-02-28)` ✓
+
+### Fix-B: "N년전 M월" ref_year 연동 버그
+- `query_translate.py`: "1년전 7월" 파싱 시 ref_year=2025로 설정했으나 월 파싱이 독립 실행되어 2026년 7월 반환하던 버그 수정
+- N년전 처리 직후 월 패턴 감지 시 해당 연도의 월로 반환
+- 수정 후: "1년전 7월" → `(2025-07-01, 2025-07-31)` ✓
+
+### Fix-C: RRF 채널 가중치 합 1.0 정규화
+- `hybrid.py`: `intent_weights()` 반환값이 합 0.88 등으로 불균일하던 문제 수정
+- 모든 intent_weights 반환 전 `sum(raw)/1.0` 으로 정규화
+
+### S6: place_terms 동의어 확장
+- `planner.py`: `PLACE_ALIASES` 딕셔너리 추가 (약 30개 지명 변형 매핑)
+  - "제주도" → "제주", "서울시" → "서울", "강남역" → "강남" 등
+- `_matching_terms()`: 토큰 + 전체 문자열 기준 alias 확장으로 place_terms 검출
+
+### S7: 복합 한글 토큰 분해 휴리스틱
+- `planner.py`: `_split_compound_token()` 추가
+  - "제주도갔던사진" → ["제주도", "사진"] 분해
+  - 어미/조사/filler 기반 순차 분리 (KoNLPy 불필요)
+- `_tokens()`: 6자 이상 한글 토큰에 자동 적용
+
+### S8: search_document 날짜/계절 신호 추가
+- `catalog.py`: `_datetime_terms()` 추가 → exif_datetime 기반 "2025", "4월", "봄", "spring" 등 semantic_text에 포함
+- FTS 기반 날짜 쿼리 품질 향상
+
+### S9: CLIP 쿼리 자연문장 템플릿
+- `query_translate.py`: `_CLIP_TEMPLATES` (30개 키워드→영어 문장 fragment) + `_build_clip_sentence()` 추가
+- `expand_for_clip()`: 자연문장을 첫 번째 variant로 배치
+- 예: "가족 제주" → `"a family together Jeju island beach landscape Korea"` (CLIP 친화적)
+
+### S10: resolve_effective_mode에 planner intent 반영
+- `hybrid.py`: `resolve_effective_mode()`에 `planner_intent` kwarg 추가
+- `planner_intent='visual'` + OCR 신호 없음 → `"semantic"` 모드로 라우팅
+- `planner_intent='ocr'` + 얼굴 힌트 없음 → `"ocr"` 모드로 라우팅
+- 기존 휴리스틱 hint set과 planner 분석 결과 병합하여 더 정확한 모드 결정
+
+### 검증 결과 (plan_query 직접 실행)
+| 쿼리 | place_terms | date_from | intent | CLIP variant |
+|------|-------------|-----------|--------|--------------|
+| "작년에 가족이랑 제주도갔던사진" | ['제주'] | 2025-01-01 | visual | "a family together Jeju island..." |
+| "1년전 7월 바다" | ['바다'] | 2025-07-01 | visual | "ocean beach waves sea" |
+| "작년 겨울 눈" | [] | 2024-12-01 | visual | "winter snow cold scenery" |
+| "제주도 여행사진" | ['제주'] | None | visual | "a travel vacation trip Jeju..." |
+
+### 변경된 파일 목록
+`app/services/search/`: query_translate.py, planner.py, hybrid.py  
+`app/services/semantic/`: catalog.py
