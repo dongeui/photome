@@ -7,6 +7,7 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import func, select, text
 
 from app.core.settings import load_settings
@@ -277,6 +278,32 @@ def test_async_semantic_maintenance_job_exposes_status(client: TestClient, sourc
     assert status_job["job_id"] == job["job_id"]
     assert status_job["status"] == "succeeded"
     assert "pending" in status_job["result"]
+
+
+def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: TestClient) -> None:
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'const phase1StorageKey = "photome.dashboard.phase1.job";' in html
+    assert 'const phase2StorageKey = "photome.dashboard.phase2.job";' in html
+    assert "resumeJob(phase1StorageKey, scanCard, scanButton, scanResult, renderScanJob);" in html
+    assert "resumeJob(phase2StorageKey, semanticCard, semanticButton, semanticResult, renderSemanticJob);" in html
+
+
+def test_async_semantic_job_returns_conflict_when_catalog_is_locked(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_locked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise OperationalError("INSERT INTO processing_jobs ...", {}, RuntimeError("database is locked"))
+
+    monkeypatch.setattr(client.app.state.pipeline, "submit_semantic_maintenance_job", raise_locked)
+
+    response = client.post("/scan/semantic-maintenance/async", params={"batch_size": 10})
+
+    assert response.status_code == 409
+    assert "Another library job is still writing to the catalog" in response.json()["detail"]
 
 
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:

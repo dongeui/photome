@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
+from sqlalchemy.exc import OperationalError
 
 from app.api.deps import require_state
 from app.models.job import ProcessingJob
@@ -43,12 +44,15 @@ async def trigger_scan_async(
 ) -> dict[str, Any]:
     pipeline = require_state(request, "pipeline")
     requested_roots = _parse_source_roots(source_root=source_root, source_roots=source_roots)
-    summary = pipeline.submit_scan_job(
-        full_scan=full_scan,
-        run_now=False,
-        trigger="api-async",
-        source_roots=requested_roots,
-    )
+    try:
+        summary = pipeline.submit_scan_job(
+            full_scan=full_scan,
+            run_now=False,
+            trigger="api-async",
+            source_roots=requested_roots,
+        )
+    except OperationalError as exc:
+        _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_scan_job, summary.job_id)
     return {"job": asdict(summary)}
 
@@ -96,11 +100,14 @@ async def trigger_semantic_backfill_async(
     batch_size: int = Query(default=50, ge=1, le=500),
 ) -> dict[str, Any]:
     pipeline = require_state(request, "pipeline")
-    summary = pipeline.submit_semantic_backfill_job(
-        batch_size=batch_size,
-        run_now=False,
-        trigger="api-async",
-    )
+    try:
+        summary = pipeline.submit_semantic_backfill_job(
+            batch_size=batch_size,
+            run_now=False,
+            trigger="api-async",
+        )
+    except OperationalError as exc:
+        _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
     return {"job": asdict(summary)}
 
@@ -122,11 +129,14 @@ async def trigger_semantic_maintenance_async(
     batch_size: int = Query(default=100, ge=1, le=1000),
 ) -> dict[str, Any]:
     pipeline = require_state(request, "pipeline")
-    summary = pipeline.submit_semantic_maintenance_job(
-        batch_size=batch_size,
-        run_now=False,
-        trigger="api-async",
-    )
+    try:
+        summary = pipeline.submit_semantic_maintenance_job(
+            batch_size=batch_size,
+            run_now=False,
+            trigger="api-async",
+        )
+    except OperationalError as exc:
+        _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
     return {"job": asdict(summary)}
 
@@ -162,3 +172,13 @@ def _parse_source_roots(*, source_root: Optional[List[str]], source_roots: Optio
         resolved_roots.append(path)
 
     return tuple(resolved_roots) if resolved_roots else None
+
+
+def _raise_job_submission_busy(exc: OperationalError) -> None:
+    message = str(getattr(exc, "orig", exc)).lower()
+    if "database is locked" in message:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another library job is still writing to the catalog. Wait a moment and try again.",
+        ) from exc
+    raise exc

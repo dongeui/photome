@@ -517,6 +517,8 @@ async def dashboard(request: Request) -> HTMLResponse:
     const semanticResult = document.getElementById("phase2-semantic-result");
     const semanticCard = document.getElementById("phase2-card");
     const semanticButton = document.getElementById("phase2-semantic-button");
+    const phase1StorageKey = "photome.dashboard.phase1.job";
+    const phase2StorageKey = "photome.dashboard.phase2.job";
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     function renderScanJob(job) {{
       const summary = job?.result?.summary || {{}};
@@ -550,6 +552,44 @@ async def dashboard(request: Request) -> HTMLResponse:
         scanResult.textContent = renderScanJob(job);
         if (job.status !== "queued" && job.status !== "running") return job;
         await sleep(1200);
+      }}
+    }}
+    function rememberJob(key, jobId) {{
+      try {{
+        localStorage.setItem(key, jobId);
+      }} catch (_error) {{}}
+    }}
+    function forgetJob(key) {{
+      try {{
+        localStorage.removeItem(key);
+      }} catch (_error) {{}}
+    }}
+    function loadRememberedJob(key) {{
+      try {{
+        return localStorage.getItem(key) || "";
+      }} catch (_error) {{
+        return "";
+      }}
+    }}
+    async function resumeJob(key, card, button, result, render) {{
+      const jobId = loadRememberedJob(key);
+      if (!jobId) return;
+      result.classList.add("visible");
+      card.classList.add("is-running");
+      button.disabled = true;
+      result.textContent = "Reconnecting to running job...";
+      try {{
+        const job = await pollScanJob(jobId);
+        result.textContent = render(job);
+        if (job.status !== "queued" && job.status !== "running") {{
+          forgetJob(key);
+        }}
+      }} catch (error) {{
+        result.textContent = `error: ${{error.message}}`;
+        forgetJob(key);
+      }} finally {{
+        card.classList.remove("is-running");
+        button.disabled = false;
       }}
     }}
     function renderSemanticJob(job) {{
@@ -588,10 +628,16 @@ async def dashboard(request: Request) -> HTMLResponse:
         const response = await fetch(`/scan/async?${{params.toString()}}`, {{ method: "POST" }});
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        rememberJob(phase1StorageKey, payload.job.job_id);
         scanResult.textContent = renderScanJob(payload.job);
-        await pollScanJob(payload.job.job_id);
+        const job = await pollScanJob(payload.job.job_id);
+        scanResult.textContent = renderScanJob(job);
+        if (job.status !== "queued" && job.status !== "running") {{
+          forgetJob(phase1StorageKey);
+        }}
       }} catch (error) {{
         scanResult.textContent = `error: ${{error.message}}`;
+        forgetJob(phase1StorageKey);
       }} finally {{
         scanCard.classList.remove("is-running");
         scanButton.disabled = false;
@@ -612,16 +658,23 @@ async def dashboard(request: Request) -> HTMLResponse:
         const response = await fetch(`${{endpoint}}?${{params.toString()}}`, {{ method: "POST" }});
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        rememberJob(phase2StorageKey, payload.job.job_id);
         semanticResult.textContent = renderSemanticJob(payload.job);
         const job = await pollScanJob(payload.job.job_id);
         semanticResult.textContent = renderSemanticJob(job);
+        if (job.status !== "queued" && job.status !== "running") {{
+          forgetJob(phase2StorageKey);
+        }}
       }} catch (error) {{
         semanticResult.textContent = `error: ${{error.message}}`;
+        forgetJob(phase2StorageKey);
       }} finally {{
         semanticCard.classList.remove("is-running");
         semanticButton.disabled = false;
       }}
     }});
+    resumeJob(phase1StorageKey, scanCard, scanButton, scanResult, renderScanJob);
+    resumeJob(phase2StorageKey, semanticCard, semanticButton, semanticResult, renderSemanticJob);
 
     const searchDebugForm = document.getElementById("search-debug-form");
     const searchDebugResult = document.getElementById("search-debug-result");
