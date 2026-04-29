@@ -8,6 +8,7 @@ propagated to the embedding backend as date filters.
 from __future__ import annotations
 
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time
 from typing import Protocol
 
@@ -131,19 +132,29 @@ class HybridSearchService:
             date_to = datetime.combine(plan.date_to, time.max) if plan.date_to else None
 
         keyword_query = plan.keyword_query or cleaned
+
+        # OCR must run first — its results drive effective_mode resolution
         ocr_results = self._backend.search_by_ocr(keyword_query, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
         effective_mode, intent_reason = resolve_effective_mode(cleaned, normalized_mode, ocr_results)
 
-        shadow_results = (
-            self._backend.search_by_shadow_doc(keyword_query, limit=limit)
-            if effective_mode in {"hybrid", "ocr", "semantic"}
-            else []
-        )
-        clip_results = (
-            self._search_clip_variants(plan, limit, place_filter, date_from, date_to)
-            if effective_mode in {"hybrid", "semantic"}
-            else []
-        )
+        # Shadow and CLIP are independent → run in parallel
+        need_shadow = effective_mode in {"hybrid", "ocr", "semantic"}
+        need_clip = effective_mode in {"hybrid", "semantic"}
+
+        shadow_results: list[dict] = []
+        clip_results: list[dict] = []
+
+        if need_shadow and need_clip:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_shadow = pool.submit(self._backend.search_by_shadow_doc, keyword_query, limit=limit)
+                fut_clip = pool.submit(self._search_clip_variants, plan, limit, place_filter, date_from, date_to)
+                shadow_results = fut_shadow.result()
+                clip_results = fut_clip.result()
+        elif need_shadow:
+            shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
+        elif need_clip:
+            clip_results = self._search_clip_variants(plan, limit, place_filter, date_from, date_to)
+
         if effective_mode == "semantic" and not clip_results:
             shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
 

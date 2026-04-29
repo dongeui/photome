@@ -15,7 +15,8 @@ from app.models.media import MediaFile
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
-from app.services.search.vector import LocalNumpyVectorIndex, VectorIndexBackend
+import os
+from app.services.search.vector import build_vector_index, VectorIndexBackend
 
 FACE_HINTS = {
     "face", "faces", "person", "people", "portrait", "selfie",
@@ -76,7 +77,10 @@ class SqlAlchemyHybridSearchBackend:
     ) -> None:
         self._session = session
         self._embeddings_root = embeddings_root
-        self._vector_index = vector_index or LocalNumpyVectorIndex(session, embeddings_root=embeddings_root)
+        _backend_setting = os.environ.get("PHOTOME_VECTOR_BACKEND", "auto")
+        self._vector_index = vector_index or build_vector_index(
+            session, embeddings_root=embeddings_root, backend=_backend_setting
+        )
 
     def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
         pattern = _like_pattern(query)
