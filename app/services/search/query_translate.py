@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import time as _time
 from datetime import date, timedelta
 from functools import lru_cache
 
@@ -107,6 +108,41 @@ LEXICON = {
     "야경": "night city lights cityscape",
     "일출": "sunrise dawn morning",
     "일몰": "sunset dusk evening",
+    # Family relations
+    "형": "brother male family portrait",
+    "오빠": "brother male family portrait",
+    "누나": "sister female family portrait",
+    "언니": "sister female family portrait",
+    "동생": "sibling family portrait",
+    "남동생": "younger brother male family portrait",
+    "여동생": "younger sister female family portrait",
+    "조카": "nephew niece child family portrait",
+    "남편": "husband couple family portrait",
+    "아내": "wife couple family portrait",
+    # Additional places
+    "강남": "Gangnam Seoul Korea urban cityscape",
+    "홍대": "Hongdae Seoul Korea street",
+    "명동": "Myeongdong Seoul Korea street shopping",
+    "경복궁": "Gyeongbokgung palace Korea traditional",
+    "인사동": "Insadong Seoul Korea traditional street",
+    "이태원": "Itaewon Seoul Korea street night",
+    "한강": "Han River Seoul Korea park outdoor",
+    "속초": "Sokcho Korea beach ocean",
+    "강릉": "Gangneung Korea beach coffee",
+    "경주": "Gyeongju Korea historic cultural",
+    "전주": "Jeonju Korea traditional hanok",
+    "해수욕장": "beach swimming sea ocean summer",
+    "놀이공원": "amusement park ride fun",
+    "동물원": "zoo animal outdoor",
+    # Additional moods / activities
+    "소풍": "picnic outdoor park nature",
+    "나들이": "outing outdoor nature",
+    "드라이브": "drive road trip car scenic",
+    "산책": "walk stroll outdoor park",
+    "조깅": "jogging running outdoor fitness",
+    "독서": "reading book indoor",
+    "공연": "performance concert stage",
+    "전시": "exhibition gallery indoor art",
 }
 
 # ---------------------------------------------------------------------------
@@ -229,13 +265,34 @@ def extract_date_range(query: str) -> tuple[date | None, date | None]:
     """Extract an implicit date range from natural language Korean/English queries.
 
     Returns (date_from, date_to) or (None, None) when no time expression found.
-    Recognized patterns: 작년/올해/이번달/지난달/이번주, 봄/여름/가을/겨울 + year modifier.
+    Recognized patterns:
+    - 작년/올해/재작년, N년전
+    - 이번달/지난달, N달전
+    - 이번주/지난주/이번주말/지난주말, N주전
+    - 봄/여름/가을/겨울 + year modifier
+    - 어제/오늘
+    - 1월~12월 specific month
+    - 설날/추석 approximate window
     """
     today = date.today()
     year = today.year
     lowered = query.casefold().strip()
 
-    # Explicit year mentions: "2023년", "23년"
+    # ── absolute: 오늘 / 어제 ──
+    if "오늘" in lowered:
+        return today, today
+    if "어제" in lowered:
+        yesterday = today - timedelta(days=1)
+        return yesterday, yesterday
+
+    # ── N년전 ──
+    m = re.search(r"([1-9]\d?)년\s*전", lowered)
+    if m:
+        n = int(m.group(1))
+        y = year - n
+        return date(y, 1, 1), date(y, 12, 31)
+
+    # ── Explicit year mentions: "2023년", "23년" ──
     explicit = re.search(r"(20\d{2}|[2-9]\d)년", query)
     ref_year: int | None = None
     if explicit:
@@ -250,18 +307,74 @@ def extract_date_range(query: str) -> tuple[date | None, date | None]:
     elif "올해" in lowered or "이번해" in lowered:
         ref_year = year
 
-    # Month modifiers
+    # ── N달전 ──
+    m = re.search(r"([1-9]\d?)달\s*전", lowered)
+    if m:
+        n = int(m.group(1))
+        target = today.replace(day=1)
+        for _ in range(n):
+            target = (target - timedelta(days=1)).replace(day=1)
+        last_day = (target.replace(month=target.month % 12 + 1, day=1) - timedelta(days=1)) if target.month < 12 else date(target.year, 12, 31)
+        return target, last_day
+
+    # ── N주전 ──
+    m = re.search(r"([1-9]\d?)주\s*전", lowered)
+    if m:
+        n = int(m.group(1))
+        week_start = today - timedelta(days=today.weekday() + 7 * n)
+        week_end = week_start + timedelta(days=6)
+        return week_start, min(week_end, today)
+
+    # ── Month modifiers ──
     if "지난달" in lowered or "저번달" in lowered:
         first_this = today.replace(day=1)
         last_month_end = first_this - timedelta(days=1)
         return last_month_end.replace(day=1), last_month_end
     if "이번달" in lowered or "이번 달" in lowered:
         return today.replace(day=1), today
+
+    # ── Week modifiers ──
+    if "이번주말" in lowered or "이번 주말" in lowered:
+        sat = today + timedelta(days=(5 - today.weekday()) % 7)
+        sun = sat + timedelta(days=1)
+        return sat, sun
+    if "지난주말" in lowered or "저번주말" in lowered:
+        last_sat = today - timedelta(days=today.weekday() + 2)
+        last_sun = last_sat + timedelta(days=1)
+        return last_sat, last_sun
+    if "지난주" in lowered or "저번주" in lowered:
+        this_monday = today - timedelta(days=today.weekday())
+        last_monday = this_monday - timedelta(weeks=1)
+        last_sunday = this_monday - timedelta(days=1)
+        return last_monday, last_sunday
     if "이번주" in lowered or "이번 주" in lowered:
         start = today - timedelta(days=today.weekday())
         return start, today
 
-    # Season mapping
+    # ── Specific month: "3월", "12월" ──
+    m = re.search(r"(1[0-2]|[1-9])월", lowered)
+    if m:
+        mo = int(m.group(1))
+        y = ref_year or year
+        import calendar
+        last_day_num = calendar.monthrange(y, mo)[1]
+        return date(y, mo, 1), date(y, mo, last_day_num)
+
+    # ── Korean holidays (approximate windows) ──
+    # 설날: late Jan ~ late Feb (lunar new year, varies)
+    if "설날" in lowered or "설연휴" in lowered:
+        y = ref_year or year
+        return date(y, 1, 15), date(y, 2, 28)
+    # 추석: mid Sep ~ mid Oct (chuseok, varies)
+    if "추석" in lowered or "추석연휴" in lowered:
+        y = ref_year or year
+        return date(y, 9, 10), date(y, 10, 15)
+    # 크리스마스: Dec 20~31
+    if "크리스마스" in lowered or "성탄절" in lowered:
+        y = ref_year or year
+        return date(y, 12, 20), date(y, 12, 31)
+
+    # ── Season mapping ──
     season_ranges: dict[str, tuple[int, int, int, int]] = {
         "봄": (3, 1, 5, 31),
         "spring": (3, 1, 5, 31),

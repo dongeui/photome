@@ -7,6 +7,7 @@ propagated to the embedding backend as date filters.
 
 from __future__ import annotations
 
+import time as _time
 from datetime import datetime, time
 from typing import Protocol
 
@@ -14,6 +15,35 @@ from app.services.search.planner import QueryPlan, plan_query
 
 
 RRF_K = 60.0
+
+# ---------------------------------------------------------------------------
+# Simple TTL query result cache (in-memory, per-process)
+# ---------------------------------------------------------------------------
+_CACHE_TTL_SECONDS = 60
+_query_cache: dict[str, tuple[float, list[dict], dict]] = {}  # key → (ts, results, meta)
+
+
+def _cache_key(query: str, limit: int, mode: str, place_filter: str | None) -> str:
+    return f"{query}|{limit}|{mode}|{place_filter or ''}"
+
+
+def _cache_get(key: str) -> tuple[list[dict], dict] | None:
+    entry = _query_cache.get(key)
+    if entry is None:
+        return None
+    ts, results, meta = entry
+    if _time.monotonic() - ts > _CACHE_TTL_SECONDS:
+        del _query_cache[key]
+        return None
+    return results, meta
+
+
+def _cache_set(key: str, results: list[dict], meta: dict) -> None:
+    # Evict oldest entries when cache grows beyond 256 keys
+    if len(_query_cache) >= 256:
+        oldest_key = min(_query_cache, key=lambda k: _query_cache[k][0])
+        del _query_cache[oldest_key]
+    _query_cache[key] = (_time.monotonic(), results, meta)
 
 FACE_HINTS = {
     "face", "faces", "person", "people", "portrait", "selfie",
@@ -74,6 +104,22 @@ class HybridSearchService:
     ) -> tuple[list[dict], dict]:
         if not query.strip():
             return [], {"effective_mode": mode, "intent_reason": "empty"}
+
+        # Cache only non-debug requests without caller-provided date filters
+        use_cache = (
+            not debug
+            and not weight_overrides
+            and date_from is None
+            and date_to is None
+        )
+        cache_key = _cache_key(query, limit, mode, place_filter) if use_cache else ""
+        if use_cache:
+            cached = _cache_get(cache_key)
+            if cached is not None:
+                results, meta = cached
+                meta = dict(meta)
+                meta["cache_hit"] = True
+                return results, meta
 
         plan = plan_query(query)
         cleaned = plan.normalized_query
@@ -156,6 +202,10 @@ class HybridSearchService:
             suggestions = self._backend.suggest_related_tags(cleaned, limit=8)
             if suggestions:
                 meta["suggestions"] = suggestions
+
+        if use_cache:
+            _cache_set(cache_key, final, meta)
+
         return final, meta
 
     def _search_clip_variants(
