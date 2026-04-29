@@ -311,8 +311,10 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
     html = response.text
     assert 'const phase1StorageKey = "photome.dashboard.phase1.job";' in html
     assert 'const phase2StorageKey = "photome.dashboard.phase2.job";' in html
+    assert 'const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";' in html
     assert "resumeJob(phase1StorageKey, scanCard, scanButton, scanResult, renderScanJob);" in html
     assert "resumeJob(phase2StorageKey, semanticCard, semanticButton, semanticResult, renderSemanticJob);" in html
+    assert "sourceRootsField.value = rememberedSourceRoots;" in html
 
 
 def test_async_semantic_job_returns_conflict_when_catalog_is_locked(

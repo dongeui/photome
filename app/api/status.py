@@ -513,12 +513,14 @@ async def dashboard(request: Request) -> HTMLResponse:
     const scanResult = document.getElementById("phase1-scan-result");
     const scanCard = document.getElementById("phase1-card");
     const scanButton = document.getElementById("phase1-scan-button");
+    const sourceRootsField = document.getElementById("phase1-source-roots");
     const semanticForm = document.getElementById("phase2-semantic-form");
     const semanticResult = document.getElementById("phase2-semantic-result");
     const semanticCard = document.getElementById("phase2-card");
     const semanticButton = document.getElementById("phase2-semantic-button");
     const phase1StorageKey = "photome.dashboard.phase1.job";
     const phase2StorageKey = "photome.dashboard.phase2.job";
+    const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     function renderScanJob(job) {{
       const summary = job?.result?.summary || {{}};
@@ -571,6 +573,18 @@ async def dashboard(request: Request) -> HTMLResponse:
         return "";
       }}
     }}
+    function rememberText(key, value) {{
+      try {{
+        localStorage.setItem(key, value);
+      }} catch (_error) {{}}
+    }}
+    function loadRememberedText(key) {{
+      try {{
+        return localStorage.getItem(key) || "";
+      }} catch (_error) {{
+        return "";
+      }}
+    }}
     async function resumeJob(key, card, button, result, render) {{
       const jobId = loadRememberedJob(key);
       if (!jobId) return;
@@ -613,13 +627,21 @@ async def dashboard(request: Request) -> HTMLResponse:
       if (job?.error_message) lines.push(`error: ${{job.error_message}}`);
       return lines.join("\\n");
     }}
+    const rememberedSourceRoots = loadRememberedText(phase1SourceRootsStorageKey);
+    if (sourceRootsField && rememberedSourceRoots.trim()) {{
+      sourceRootsField.value = rememberedSourceRoots;
+    }}
+    sourceRootsField?.addEventListener("input", () => {{
+      rememberText(phase1SourceRootsStorageKey, sourceRootsField.value);
+    }});
     scanForm?.addEventListener("submit", async (event) => {{
       event.preventDefault();
       scanResult.classList.add("visible");
       scanCard.classList.add("is-running");
       scanButton.disabled = true;
       scanResult.textContent = "Starting scan...";
-      const sourceRoots = document.getElementById("phase1-source-roots").value;
+      const sourceRoots = sourceRootsField ? sourceRootsField.value : "";
+      rememberText(phase1SourceRootsStorageKey, sourceRoots);
       const fullScan = document.getElementById("phase1-full-scan").checked;
       const params = new URLSearchParams();
       if (sourceRoots.trim()) params.set("source_roots", sourceRoots);
