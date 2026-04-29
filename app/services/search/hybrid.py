@@ -70,6 +70,7 @@ class HybridSearchService:
         date_to: object | None = None,
         mode: str = "hybrid",
         debug: bool = False,
+        weight_overrides: dict[str, float] | None = None,
     ) -> tuple[list[dict], dict]:
         if not query.strip():
             return [], {"effective_mode": mode, "intent_reason": "empty"}
@@ -100,12 +101,14 @@ class HybridSearchService:
         if effective_mode == "semantic" and not clip_results:
             shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
 
+        weights = resolved_intent_weights(effective_mode, intent_reason, overrides=weight_overrides)
         merged = fuse_ranked_results(
             effective_mode,
             intent_reason,
             ocr_results if effective_mode in {"hybrid", "ocr"} else [],
             clip_results,
             shadow_results,
+            weights=weights,
         )
         debug_candidates = [dict(item) for item in merged] if debug else None
         apply_exact_ocr_boost(cleaned, merged)
@@ -113,9 +116,13 @@ class HybridSearchService:
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
-        meta: dict = {"effective_mode": effective_mode, "intent_reason": intent_reason, "query_plan": plan.to_meta()}
+        meta: dict = {
+            "effective_mode": effective_mode,
+            "intent_reason": intent_reason,
+            "query_plan": plan.to_meta(),
+            "weight_overrides": weight_overrides or {},
+        }
         if debug:
-            weights = intent_weights(effective_mode, intent_reason)
             meta["debug"] = {
                 "requested_mode": normalized_mode,
                 "weights": weights,
@@ -170,8 +177,10 @@ def fuse_ranked_results(
     ocr_results: list[dict],
     clip_results: list[dict],
     shadow_results: list[dict],
+    *,
+    weights: dict[str, float] | None = None,
 ) -> list[dict]:
-    weights = intent_weights(effective_mode, intent_reason)
+    weights = weights or intent_weights(effective_mode, intent_reason)
     candidates: dict[str, dict] = {}
     channel_hits: dict[str, set[str]] = {}
 
@@ -275,6 +284,21 @@ def intent_weights(effective_mode: str, intent_reason: str) -> dict[str, float]:
     if intent_reason == "auto-mixed":
         return {"ocr": 0.36, "clip": 0.34, "shadow": 0.18}
     return {"ocr": 0.35, "clip": 0.36, "shadow": 0.17}
+
+
+def resolved_intent_weights(
+    effective_mode: str,
+    intent_reason: str,
+    *,
+    overrides: dict[str, float] | None = None,
+) -> dict[str, float]:
+    weights = dict(intent_weights(effective_mode, intent_reason))
+    if not overrides:
+        return weights
+    for key in ("ocr", "clip", "shadow"):
+        if key in overrides:
+            weights[key] = max(0.0, float(overrides[key]))
+    return weights
 
 
 def combined_match_reason(hits: set[str]) -> str:

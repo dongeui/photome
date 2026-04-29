@@ -261,7 +261,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     }}
     .debug-grid {{
       display: grid;
-      grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(140px, .55fr)) auto;
+      grid-template-columns: minmax(0, 1.3fr) repeat(5, minmax(112px, .42fr)) auto;
       gap: 8px;
     }}
     .debug-grid input, .debug-grid select {{
@@ -328,7 +328,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       .hero {{ grid-template-columns: 1fr; }}
       .card {{ grid-column: 1 / -1; }}
       .metric-grid {{ grid-template-columns: 1fr 1fr; }}
-      .debug-grid {{ grid-template-columns: 1fr 1fr; }}
+      .debug-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     }}
     @media (max-width: 560px) {{
       .metric-grid {{ grid-template-columns: 1fr; }}
@@ -444,6 +444,9 @@ async def dashboard(request: Request) -> HTMLResponse:
               <option value="semantic">semantic</option>
             </select>
             <input id="search-debug-place" name="place" placeholder="Place filter">
+            <input id="search-debug-w-ocr" name="w_ocr" placeholder="w_ocr" inputmode="decimal">
+            <input id="search-debug-w-clip" name="w_clip" placeholder="w_clip" inputmode="decimal">
+            <input id="search-debug-w-shadow" name="w_shadow" placeholder="w_shadow" inputmode="decimal">
             <button type="submit">Inspect Search</button>
           </div>
           <pre class="debug-result" id="search-debug-result" aria-live="polite"></pre>
@@ -498,9 +501,15 @@ async def dashboard(request: Request) -> HTMLResponse:
       const query = document.getElementById("search-debug-query").value;
       const mode = document.getElementById("search-debug-mode").value;
       const place = document.getElementById("search-debug-place").value;
+      const wOcr = document.getElementById("search-debug-w-ocr").value;
+      const wClip = document.getElementById("search-debug-w-clip").value;
+      const wShadow = document.getElementById("search-debug-w-shadow").value;
       if (query.trim()) params.set("q", query);
       if (mode) params.set("mode", mode);
       if (place.trim()) params.set("place", place);
+      if (wOcr.trim()) params.set("w_ocr", wOcr);
+      if (wClip.trim()) params.set("w_clip", wClip);
+      if (wShadow.trim()) params.set("w_shadow", wShadow);
       try {{
         const response = await fetch(`/search/debug?${{params.toString()}}`);
         const payload = await response.json();
@@ -518,10 +527,20 @@ async def dashboard(request: Request) -> HTMLResponse:
       benchmarkSummary.textContent = "";
       benchmarkResult.textContent = "Running benchmark...";
       try {{
-        const response = await fetch("/search/benchmark");
+        const params = new URLSearchParams();
+        const wOcr = document.getElementById("search-debug-w-ocr").value;
+        const wClip = document.getElementById("search-debug-w-clip").value;
+        const wShadow = document.getElementById("search-debug-w-shadow").value;
+        if (wOcr.trim()) params.set("w_ocr", wOcr);
+        if (wClip.trim()) params.set("w_clip", wClip);
+        if (wShadow.trim()) params.set("w_shadow", wShadow);
+        const response = await fetch(`/search/benchmark?${{params.toString()}}`);
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
-        benchmarkSummary.textContent = `passed ${{payload.passed}} / ${{payload.total}}, failed ${{payload.failed}}`;
+        const overrideText = Object.keys(payload.weight_overrides || {{}}).length
+          ? `, overrides ${{JSON.stringify(payload.weight_overrides)}}`
+          : "";
+        benchmarkSummary.textContent = `passed ${{payload.passed}} / ${{payload.total}}, failed ${{payload.failed}}${{overrideText}}`;
         benchmarkResult.textContent = JSON.stringify(payload.cases, null, 2);
       }} catch (error) {{
         benchmarkResult.textContent = `error: ${{error.message}}`;

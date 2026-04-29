@@ -265,7 +265,8 @@ output:
 
 ### R3 — 검색 랭킹 고도화
 
-- [ ] intent-specific channel weights
+- [x] request-level channel weight override tuning
+- [ ] persisted intent-specific channel weights
 - [ ] hard/soft filter distinction
 - [ ] reranker interface
 - [ ] result explanations

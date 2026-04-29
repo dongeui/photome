@@ -72,19 +72,40 @@ DEFAULT_BENCHMARK_CASES: tuple[BenchmarkCase, ...] = (
 )
 
 
-def run_benchmark_suite(service: HybridSearchService, *, limit: int = 10) -> dict:
-    cases = [_run_case(service, case, limit=limit) for case in DEFAULT_BENCHMARK_CASES]
+def run_benchmark_suite(
+    service: HybridSearchService,
+    *,
+    limit: int = 10,
+    weight_overrides: dict[str, float] | None = None,
+) -> dict:
+    cases = [
+        _run_case(service, case, limit=limit, weight_overrides=weight_overrides)
+        for case in DEFAULT_BENCHMARK_CASES
+    ]
     passed = sum(1 for case in cases if case["passed"])
     return {
         "total": len(cases),
         "passed": passed,
         "failed": len(cases) - passed,
+        "weight_overrides": weight_overrides or {},
         "cases": cases,
     }
 
 
-def _run_case(service: HybridSearchService, case: BenchmarkCase, *, limit: int) -> dict:
-    items, meta = service.search_with_meta(case.query, limit=limit, mode="hybrid", debug=True)
+def _run_case(
+    service: HybridSearchService,
+    case: BenchmarkCase,
+    *,
+    limit: int,
+    weight_overrides: dict[str, float] | None = None,
+) -> dict:
+    items, meta = service.search_with_meta(
+        case.query,
+        limit=limit,
+        mode="hybrid",
+        debug=True,
+        weight_overrides=weight_overrides,
+    )
     query_plan = meta.get("query_plan", {})
     checks = []
 

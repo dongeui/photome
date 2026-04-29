@@ -53,6 +53,13 @@ Inspect query planning and ranking channels:
 GET /search/debug?q=작년 여름 바다에서 가족이랑 찍은 사진
 ```
 
+Override channel weights while tuning:
+
+```
+GET /search/debug?q=영수증&w_ocr=0.8&w_clip=0.02&w_shadow=0.18
+GET /search/benchmark?w_ocr=0.8&w_clip=0.02&w_shadow=0.18
+```
+
 Run the synthetic benchmark suite for query planning and channel behavior:
 
 ```
