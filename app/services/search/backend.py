@@ -244,9 +244,9 @@ class SqlAlchemyHybridSearchBackend:
 
         fetch = max(1, limit * 4)
         # Primary FTS (unicode61 — word boundary, reliable for English)
-        rows: list = []
+        rows: list[tuple[str, float]] = []
         try:
-            rows = self._session.execute(
+            primary_rows = self._session.execute(
                 text(
                     "SELECT file_id, bm25(search_documents_fts) AS score "
                     "FROM search_documents_fts "
@@ -255,6 +255,7 @@ class SqlAlchemyHybridSearchBackend:
                 ),
                 {"query": fts_query, "limit": fetch},
             ).all()
+            rows = [(str(r[0]), float(r[1] or 0.0)) for r in primary_rows]
         except Exception:
             pass
 
@@ -273,13 +274,13 @@ class SqlAlchemyHybridSearchBackend:
                     {"query": trigram_query, "limit": fetch},
                 ).all()
                 # Merge: prefer lower (better) BM25 score per file_id
-                existing: dict[str, float] = {str(r[0]): float(r[1] or 0.0) for r in rows}
-                for file_id, score in trigram_rows:
-                    fid = str(file_id)
-                    s = float(score or 0.0)
+                existing: dict[str, float] = {fid: score for fid, score in rows}
+                for r in trigram_rows:
+                    fid = str(r[0])
+                    s = float(r[1] or 0.0)
                     if fid not in existing or s < existing[fid]:
                         existing[fid] = s
-                rows = [(fid, score) for fid, score in existing.items()]
+                rows = list(existing.items())
             except Exception:
                 pass  # trigram table may not exist on older SQLite
 

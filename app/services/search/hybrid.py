@@ -8,7 +8,7 @@ propagated to the embedding backend as date filters.
 from __future__ import annotations
 
 import time as _time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time
 from typing import Protocol
 
@@ -545,7 +545,7 @@ def set_match_explanations(results: list[dict]) -> None:
                 parts.append(reason)
 
         # Contextual enrichments
-        face_count = int((result.get("signals") or {}).get("face_count") or 0)
+        face_count = int(result.get("face_count") or 0)
         if face_count > 0:
             parts.append(f"얼굴 {face_count}명")
 
@@ -557,7 +557,7 @@ def set_match_explanations(results: list[dict]) -> None:
         if place_tags:
             parts.append(f"장소: {place_tags[0]}")
 
-        exif_dt = result.get("exif_datetime")
+        exif_dt = result.get("captured_at")
         if exif_dt:
             try:
                 from datetime import datetime as _dt
