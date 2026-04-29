@@ -180,7 +180,9 @@ class HybridSearchService:
 
         # OCR must run first — its results drive effective_mode resolution
         ocr_results = self._backend.search_by_ocr(keyword_query, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
-        effective_mode, intent_reason = resolve_effective_mode(cleaned, normalized_mode, ocr_results)
+        effective_mode, intent_reason = resolve_effective_mode(
+            cleaned, normalized_mode, ocr_results, planner_intent=plan.intent
+        )
 
         # Shadow and CLIP are independent → run in parallel
         need_shadow = effective_mode in {"hybrid", "ocr", "semantic"}
@@ -401,7 +403,13 @@ def fuse_ranked_results(
     return fused
 
 
-def resolve_effective_mode(query: str, requested_mode: str, ocr_results: list[dict]) -> tuple[str, str]:
+def resolve_effective_mode(
+    query: str,
+    requested_mode: str,
+    ocr_results: list[dict],
+    *,
+    planner_intent: str | None = None,
+) -> tuple[str, str]:
     if requested_mode != "hybrid":
         return requested_mode, "manual"
 
@@ -416,6 +424,11 @@ def resolve_effective_mode(query: str, requested_mode: str, ocr_results: list[di
     has_code_like_text = any(ch.isdigit() for ch in query) or any(ch in query for ch in "-_:/[]()#")
     is_short_query = len(query.strip()) <= 12
 
+    # planner_intent='ocr' signals a clear text-search query — defer to it
+    # before running the hint-based heuristics below.
+    if planner_intent == "ocr" and not has_face_hint:
+        return "ocr", "planner-ocr"
+
     if has_face_hint and (has_text_hint or has_screen_hint or has_code_like_text):
         return "hybrid", "auto-mixed"
     if has_face_hint:
@@ -425,6 +438,12 @@ def resolve_effective_mode(query: str, requested_mode: str, ocr_results: list[di
         return "semantic", "auto-travel"
     if has_celebration_hint and not has_text_hint:
         return "semantic", "auto-celebration"
+
+    # planner detected a visual intent (date + place/person, pure visual)
+    # and there are no strong OCR signals → go semantic
+    if planner_intent == "visual" and not has_text_hint and not word_hits and not phrase_hits:
+        return "semantic", "planner-visual"
+
     if has_text_hint and not ocr_results:
         return "ocr", "auto-text-hint"
     if has_screen_hint and (word_hits or phrase_hits or is_short_query):
@@ -440,12 +459,16 @@ def resolve_effective_mode(query: str, requested_mode: str, ocr_results: list[di
 
 def intent_weights(effective_mode: str, intent_reason: str) -> dict[str, float]:
     if effective_mode == "ocr":
-        return {"ocr": 0.62, "clip": 0.04, "shadow": 0.22}
-    if effective_mode == "semantic":
-        return {"ocr": 0.03, "clip": 0.70, "shadow": 0.18}
-    if intent_reason == "auto-mixed":
-        return {"ocr": 0.36, "clip": 0.34, "shadow": 0.18}
-    return {"ocr": 0.35, "clip": 0.36, "shadow": 0.17}
+        raw = {"ocr": 0.62, "clip": 0.04, "shadow": 0.22}
+    elif effective_mode == "semantic":
+        raw = {"ocr": 0.03, "clip": 0.70, "shadow": 0.18}
+    elif intent_reason == "auto-mixed":
+        raw = {"ocr": 0.36, "clip": 0.34, "shadow": 0.18}
+    else:
+        raw = {"ocr": 0.35, "clip": 0.36, "shadow": 0.17}
+    # Normalise so channels always sum to 1.0 — prevents max_score distortion
+    total = sum(raw.values()) or 1.0
+    return {k: v / total for k, v in raw.items()}
 
 
 def resolved_intent_weights(

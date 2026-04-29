@@ -31,6 +31,42 @@ PLACE_TERMS = {
     "해수욕장", "박물관", "동물원", "수족관", "놀이공원", "놀이터", "체육관", "도서관",
     "지하철", "버스", "기차", "ktx", "고속도로",
 }
+
+# 지명 변형 → canonical PLACE_TERMS 키로 매핑
+# 예: "제주도" 입력 시 place_terms에 "제주" 포함
+PLACE_ALIASES: dict[str, str] = {
+    "제주도": "제주",
+    "제주특별자치도": "제주",
+    "제주시": "제주",
+    "서귀포": "제주",
+    "서울시": "서울",
+    "서울특별시": "서울",
+    "부산시": "부산",
+    "부산광역시": "부산",
+    "인천시": "인천",
+    "인천광역시": "인천",
+    "대전시": "대전",
+    "대전광역시": "대전",
+    "대구시": "대구",
+    "대구광역시": "대구",
+    "광주시": "광주",
+    "광주광역시": "광주",
+    "울산시": "울산",
+    "울산광역시": "울산",
+    "강남구": "강남",
+    "강남역": "강남",
+    "홍대입구": "홍대",
+    "홍대역": "홍대",
+    "홍대거리": "홍대",
+    "명동역": "명동",
+    "이태원역": "이태원",
+    "한강공원": "한강",
+    "속초시": "속초",
+    "강릉시": "강릉",
+    "경주시": "경주",
+    "전주시": "전주",
+    "수원시": "수원",
+}
 VISUAL_TERMS = {
     "baby", "food", "beach", "travel", "wedding", "birthday", "dog", "cat", "mountain", "sunset",
     "아기", "음식", "바다", "여행", "결혼식", "생일", "강아지", "고양이", "산", "일몰",
@@ -118,14 +154,82 @@ def plan_query(query: str) -> QueryPlan:
     )
 
 
+# 흔한 한국어 어미/조사 — 붙어있는 복합 토큰을 분해할 때 제거
+_KO_TRAILING_ENDINGS = (
+    "에서의", "으로의", "로부터",
+    "갔던", "찍었던", "찍은", "촬영한", "찍힌",
+    "에서", "으로", "에게", "한테", "부터", "까지",
+    "이랑", "하고", "와", "과",
+    "이라는", "라는", "이라", "이고", "이며",
+    "하는", "하던", "했던", "된", "되는", "되던",
+    "있는", "있던", "없는",
+    "사진", "영상", "이미지", "그림", "컷",
+    "에의", "의", "을", "를", "이", "가", "은", "는", "에", "로", "와", "과",
+)
+
+
+def _split_compound_token(token: str) -> list[str]:
+    """공백 없이 붙어있는 복합 한글 토큰을 어미/조사 기준으로 분해.
+
+    예: "제주도갔던사진" → ["제주도", "갔던", "사진"]
+        "엄마랑" → ["엄마"]
+        "서울에서" → ["서울"]
+    의미 없는 잔여 토큰(1글자, 순수 어미)은 제거.
+    """
+    result: list[str] = []
+    remaining = token
+    # 최대 5회 반복으로 순차적으로 어미 분리
+    for _ in range(5):
+        if not remaining or not re.search(r"[가-힣]", remaining):
+            break
+        split_here: str | None = None
+        for ending in _KO_TRAILING_ENDINGS:
+            if remaining.endswith(ending) and len(remaining) > len(ending):
+                core = remaining[: -len(ending)]
+                if len(core) >= 2:
+                    split_here = core
+                    tail = ending
+                    break
+        if split_here:
+            # 잘린 어미 자체도 의미 있으면 보존 (예: "사진", "영상")
+            if tail in {"사진", "영상", "이미지", "그림", "컷"} and len(tail) >= 2:
+                result.append(tail)
+            remaining = split_here
+        else:
+            break
+    if remaining and len(remaining) >= 2:
+        result.insert(0, remaining)
+    return result if result else [token]
+
+
 def _tokens(query: str) -> list[str]:
-    return re.findall(r"[0-9A-Za-z가-힣_]+", query.casefold())
+    raw = re.findall(r"[0-9A-Za-z가-힣_]+", query.casefold())
+    tokens: list[str] = []
+    for token in raw:
+        # 한글이 포함된 토큰만 분해 시도 (6자 이상인 경우 — 짧은 건 이미 단어)
+        if re.search(r"[가-힣]", token) and len(token) >= 6:
+            parts = _split_compound_token(token)
+            tokens.extend(parts)
+        else:
+            tokens.append(token)
+    return tokens
 
 
 def _matching_terms(tokens: list[str], normalized: str, terms: set[str]) -> list[str]:
     lowered = normalized.casefold()
-    hits = [term for term in terms if term in tokens or term in lowered]
-    return sorted(set(hits), key=lambda item: (len(item), item))
+    hits = set(term for term in terms if term in tokens or term in lowered)
+
+    # Alias expansion: "제주도" → add "제주" if it's in PLACE_TERMS
+    for token in tokens:
+        canonical = PLACE_ALIASES.get(token)
+        if canonical and canonical in terms:
+            hits.add(canonical)
+    # Also check substring aliases in the full normalized query
+    for alias, canonical in PLACE_ALIASES.items():
+        if alias in lowered and canonical in terms:
+            hits.add(canonical)
+
+    return sorted(hits, key=lambda item: (len(item), item))
 
 
 def _is_year_token(token: str) -> bool:

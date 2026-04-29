@@ -193,6 +193,7 @@ class SemanticCatalog:
             *[tag.tag_value for tag in tags],
         ]
         caption_parts = _caption_terms(caption)
+        date_terms = _datetime_terms(media_file.exif_datetime)
         semantic_parts = [
             media_file.filename,
             annotation.title if annotation else None,
@@ -200,6 +201,7 @@ class SemanticCatalog:
             *[tag.tag_value for tag in tags],
             *_signal_terms(signals),
             *caption_parts,
+            *date_terms,
         ]
         search_text = _join_text([*keyword_parts, *semantic_parts])
         source_updated_at = _max_datetime(
@@ -343,6 +345,28 @@ def _caption_terms(caption: MediaCaption | None) -> list[str]:
     terms.extend(caption.activities_json or [])
     if caption.setting:
         terms.append(caption.setting)
+    return terms
+
+
+def _datetime_terms(dt: datetime | None) -> list[str]:
+    """Generate year/month/season text tokens for FTS/semantic search.
+
+    Adds terms like "2025", "4월", "봄", "spring" so that natural-language
+    date queries ("작년 봄", "2024년") can match via FTS even before the
+    date_range filter is applied.
+    """
+    if dt is None:
+        return []
+    terms: list[str] = [str(dt.year), f"{dt.month}월"]
+    month = dt.month
+    if month in (3, 4, 5):
+        terms.extend(["봄", "spring"])
+    elif month in (6, 7, 8):
+        terms.extend(["여름", "summer"])
+    elif month in (9, 10, 11):
+        terms.extend(["가을", "fall", "autumn"])
+    else:  # 12, 1, 2
+        terms.extend(["겨울", "winter"])
     return terms
 
 

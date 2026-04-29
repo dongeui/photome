@@ -237,6 +237,69 @@ ENGLISH_EXPANSIONS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# CLIP natural-sentence templates
+# Keyword → natural English sentence fragment for CLIP text encoder
+# ---------------------------------------------------------------------------
+_CLIP_TEMPLATES: dict[str, str] = {
+    "가족": "a family together",
+    "엄마": "a mother with family",
+    "아빠": "a father with family",
+    "할머니": "an elderly grandmother with family",
+    "할아버지": "an elderly grandfather with family",
+    "아기": "a cute baby infant",
+    "아이": "a child playing",
+    "커플": "a couple together romantic",
+    "친구": "friends hanging out together",
+    "여행": "a travel vacation trip",
+    "제주": "Jeju island beach landscape Korea",
+    "바다": "ocean beach waves sea",
+    "산": "mountain hiking outdoor scenic",
+    "공원": "outdoor park green nature",
+    "카페": "cozy cafe coffee shop interior",
+    "생일": "birthday cake celebration party",
+    "결혼식": "wedding ceremony formal couple",
+    "졸업식": "graduation ceremony academic",
+    "파티": "party celebration people",
+    "소풍": "outdoor picnic park family",
+    "여름": "summer outdoor sunny beach",
+    "겨울": "winter snow cold scenery",
+    "봄": "spring cherry blossom flowers",
+    "가을": "autumn fall foliage leaves",
+    "야경": "city lights night cityscape",
+    "일몰": "sunset dusk orange sky",
+    "음식": "food meal restaurant table",
+    "강아지": "cute dog puppy pet",
+    "고양이": "cute cat kitten pet",
+    "꽃": "flowers garden bloom colorful",
+    "하늘": "blue sky clouds outdoor",
+}
+
+
+def _build_clip_sentence(query: str) -> str | None:
+    """Compose a natural English sentence from matched template fragments.
+
+    "가족 제주" → "a family together at Jeju island beach landscape Korea"
+    Returns None if no templates matched.
+    """
+    lowered = query.casefold()
+    matched: list[str] = []
+    seen_text: set[str] = set()
+    for keyword, fragment in _CLIP_TEMPLATES.items():
+        if keyword in lowered and fragment not in seen_text:
+            matched.append(fragment)
+            seen_text.add(fragment)
+    if not matched:
+        return None
+    if len(matched) == 1:
+        return matched[0]
+    # Join first fragment as subject, rest with "at/with/and"
+    parts = [matched[0]]
+    for frag in matched[1:]:
+        parts.append(frag)
+    return " ".join(parts)
+
+
 def expand_for_clip(query: str) -> list[str]:
     """Return original query plus optional English variants for CLIP."""
     cleaned = normalize_query(query)
@@ -249,15 +312,26 @@ def expand_for_clip(query: str) -> list[str]:
         semantic_core = cleaned
 
     variants = [semantic_core]
+
+    # 1. Natural sentence template (most CLIP-friendly)
+    sentence = _build_clip_sentence(cleaned)
+    if sentence:
+        variants.append(sentence)
+
+    # 2. Lexicon-based keyword translation
     translated = translate_to_english(semantic_core)
     if translated and translated.casefold() != semantic_core.casefold():
         variants.append(translated)
+
+    # 3. English term expansion
     english = _expand_english_terms(semantic_core)
     if english:
         variants.append(english)
-    # Include original cleaned query too if different from semantic_core
+
+    # Include original cleaned query if different from semantic_core
     if cleaned != semantic_core:
         variants.append(cleaned)
+
     return _dedupe(variants)
 
 
@@ -290,6 +364,13 @@ def extract_date_range(query: str) -> tuple[date | None, date | None]:
     if m:
         n = int(m.group(1))
         y = year - n
+        # Check for a specific month: "1년전 7월" → ref_year로 그 해의 해당 월 반환
+        mo_m = re.search(r"(1[0-2]|[1-9])월", lowered)
+        if mo_m:
+            import calendar
+            mo = int(mo_m.group(1))
+            last_day_num = calendar.monthrange(y, mo)[1]
+            return date(y, mo, 1), date(y, mo, last_day_num)
         return date(y, 1, 1), date(y, 12, 31)
 
     # ── Explicit year mentions: "2023년", "23년" ──
@@ -389,8 +470,12 @@ def extract_date_range(query: str) -> tuple[date | None, date | None]:
     for season_key, (sm, sd, em, ed) in season_ranges.items():
         if season_key in lowered:
             y = ref_year or year
-            if sm > em:  # winter wraps year
-                date_from = date(y - 1 if ref_year is None else y, sm, sd)
+            if sm > em:
+                # Winter wraps year boundary: Dec(y-1) → Feb(y)
+                # "작년 겨울" (ref_year=2025) → Dec 2024 ~ Feb 2025
+                # "겨울" (no ref_year, y=current) → Dec(y-1) ~ Feb(y)
+                start_year = (ref_year - 1) if ref_year is not None else (year - 1)
+                date_from = date(start_year, sm, sd)
                 date_to = date(y, em, ed)
             else:
                 date_from = date(y, sm, sd)
