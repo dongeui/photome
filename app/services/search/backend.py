@@ -15,7 +15,7 @@ from app.models.annotation import MediaAnnotation
 from app.models.face import Face
 from app.models.media import MediaFile
 from app.models.person import Person
-from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument
+from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchWeightProfile
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
 from app.services.search.vector import build_vector_index, VectorIndexBackend
@@ -83,6 +83,18 @@ class SqlAlchemyHybridSearchBackend:
         self._vector_index = vector_index or build_vector_index(
             session, embeddings_root=embeddings_root, backend=_backend_setting
         )
+
+    def load_persisted_weights(self, intent: str, reason: str) -> dict[str, float] | None:
+        """Return persisted weights for intent+reason, or None if not customised."""
+        row = self._session.execute(
+            select(SearchWeightProfile).where(
+                SearchWeightProfile.intent == intent,
+                SearchWeightProfile.reason == reason,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        return {"ocr": row.w_ocr, "clip": row.w_clip, "shadow": row.w_shadow}
 
     def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
         pattern = _like_pattern(query)

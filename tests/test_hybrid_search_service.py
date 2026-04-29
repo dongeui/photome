@@ -111,4 +111,4 @@ def test_semantic_query_uses_auto_tags_as_ranking_signal() -> None:
 
     assert meta["effective_mode"] == "semantic"
     assert results[0]["file_id"] == "auto-baby"
-    assert results[0]["match_explanation"] == "exact tag match"
+    assert "태그 일치" in results[0]["match_explanation"]

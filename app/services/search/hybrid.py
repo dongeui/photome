@@ -86,6 +86,8 @@ class HybridSearchBackend(Protocol):
 
     def suggest_related_tags(self, query: str, *, limit: int = 8) -> list[str]: ...
 
+    def load_persisted_weights(self, intent: str, reason: str) -> dict[str, float] | None: ...
+
 
 class HybridSearchService:
     def __init__(self, backend: HybridSearchBackend) -> None:
@@ -158,7 +160,16 @@ class HybridSearchService:
         if effective_mode == "semantic" and not clip_results:
             shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
 
-        weights = resolved_intent_weights(effective_mode, intent_reason, overrides=weight_overrides)
+        # Persisted DB weights take precedence over built-in defaults,
+        # but explicit per-request overrides take the highest priority
+        persisted: dict[str, float] | None = None
+        if not weight_overrides and hasattr(self._backend, "load_persisted_weights"):
+            persisted = self._backend.load_persisted_weights(effective_mode, intent_reason)
+
+        weights = resolved_intent_weights(
+            effective_mode, intent_reason,
+            overrides=weight_overrides or persisted,
+        )
         merged = fuse_ranked_results(
             effective_mode,
             intent_reason,
@@ -451,20 +462,57 @@ def search_sort_key(item: dict) -> tuple[bool, bool, float]:
 
 def set_match_explanations(results: list[dict]) -> None:
     for result in results:
+        parts: list[str] = []
+
+        # Primary match signal
         if result.get("ocr_exact_match"):
-            result["match_explanation"] = "exact OCR text"
+            parts.append("OCR 텍스트 일치")
         elif result.get("tag_exact_match"):
-            result["match_explanation"] = "exact tag match"
-        elif result.get("match_reason") == "ocr+clip":
-            result["match_explanation"] = "OCR and visual match"
-        elif result.get("match_reason") == "clip+shadow":
-            result["match_explanation"] = "visual and tag match"
-        elif result.get("match_reason") == "clip":
-            result["match_explanation"] = "visual semantic match"
-        elif result.get("match_reason") == "ocr":
-            result["match_explanation"] = "OCR text match"
+            matched = result.get("matched_tag")
+            parts.append(f"태그 일치: {matched}" if matched else "태그 일치")
         else:
-            result["match_explanation"] = result.get("match_reason", "match")
+            reason = result.get("match_reason", "")
+            if reason == "ocr+clip":
+                parts.append("OCR + 시각 의미 일치")
+            elif reason == "clip+shadow":
+                parts.append("시각 의미 + 태그 일치")
+            elif reason == "clip":
+                parts.append("시각 의미 일치")
+            elif reason == "ocr":
+                parts.append("OCR 텍스트 일치")
+            elif reason == "shadow":
+                parts.append("태그/문서 일치")
+            elif reason:
+                parts.append(reason)
+
+        # Contextual enrichments
+        face_count = int((result.get("signals") or {}).get("face_count") or 0)
+        if face_count > 0:
+            parts.append(f"얼굴 {face_count}명")
+
+        place_tags = [
+            tag["value"]
+            for tag in (result.get("tags") or [])
+            if tag.get("type") in ("place",) and not _is_coordinate_tag(str(tag.get("value", "")))
+        ]
+        if place_tags:
+            parts.append(f"장소: {place_tags[0]}")
+
+        exif_dt = result.get("exif_datetime")
+        if exif_dt:
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(str(exif_dt)) if isinstance(exif_dt, str) else exif_dt
+                parts.append(f"{dt.year}년 {dt.month}월")
+            except Exception:
+                pass
+
+        result["match_explanation"] = " · ".join(parts) if parts else "일치"
+
+
+def _is_coordinate_tag(value: str) -> bool:
+    """Return True if the tag value looks like a raw GPS coordinate."""
+    return bool(__import__("re").match(r"^-?\d+\.\d+,-?\d+\.\d+$", value))
 
 
 def _preview_results(results: list[dict], *, limit: int = 8) -> list[dict]:

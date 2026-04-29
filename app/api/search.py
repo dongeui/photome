@@ -5,12 +5,16 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
+from sqlalchemy import select
 
 from app.api.deps import require_state
+from app.models.semantic import SearchWeightProfile
 from app.services.search import HybridSearchService
 from app.services.search.backend import SqlAlchemyHybridSearchBackend
 from app.services.search.benchmark import run_benchmark_suite
+from app.services.search.hybrid import intent_weights
 
 
 router = APIRouter(tags=["search"])
@@ -153,3 +157,110 @@ def _weight_overrides(
     if w_shadow is not None:
         overrides["shadow"] = w_shadow
     return overrides
+
+
+# ---------------------------------------------------------------------------
+# Weight profile API
+# ---------------------------------------------------------------------------
+
+class WeightProfileResponse(BaseModel):
+    intent: str
+    reason: str
+    w_ocr: float
+    w_clip: float
+    w_shadow: float
+
+
+class WeightProfileUpdate(BaseModel):
+    w_ocr: float
+    w_clip: float
+    w_shadow: float
+
+
+@router.get("/search/weights", response_model=list[WeightProfileResponse])
+def list_weight_profiles(request: Request) -> list[WeightProfileResponse]:
+    """List all persisted intent weight profiles."""
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        rows = session.scalars(select(SearchWeightProfile).order_by(
+            SearchWeightProfile.intent, SearchWeightProfile.reason
+        )).all()
+        return [
+            WeightProfileResponse(
+                intent=row.intent, reason=row.reason,
+                w_ocr=row.w_ocr, w_clip=row.w_clip, w_shadow=row.w_shadow,
+            )
+            for row in rows
+        ]
+
+
+@router.put("/search/weights/{intent}/{reason}", response_model=WeightProfileResponse)
+def upsert_weight_profile(
+    intent: str,
+    reason: str,
+    body: WeightProfileUpdate,
+    request: Request,
+) -> WeightProfileResponse:
+    """Create or update a weight profile for a specific intent+reason pair.
+
+    Example: PUT /search/weights/semantic/auto-travel
+    Body: {"w_ocr": 0.03, "w_clip": 0.75, "w_shadow": 0.15}
+    """
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        existing = session.execute(
+            select(SearchWeightProfile).where(
+                SearchWeightProfile.intent == intent,
+                SearchWeightProfile.reason == reason,
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = SearchWeightProfile(intent=intent, reason=reason,
+                                           w_ocr=body.w_ocr, w_clip=body.w_clip, w_shadow=body.w_shadow)
+            session.add(existing)
+        else:
+            existing.w_ocr = body.w_ocr
+            existing.w_clip = body.w_clip
+            existing.w_shadow = body.w_shadow
+        session.commit()
+        session.refresh(existing)
+        return WeightProfileResponse(
+            intent=existing.intent, reason=existing.reason,
+            w_ocr=existing.w_ocr, w_clip=existing.w_clip, w_shadow=existing.w_shadow,
+        )
+
+
+@router.delete("/search/weights/{intent}/{reason}", status_code=204)
+def delete_weight_profile(intent: str, reason: str, request: Request) -> None:
+    """Delete a persisted weight profile (revert to built-in defaults)."""
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        row = session.execute(
+            select(SearchWeightProfile).where(
+                SearchWeightProfile.intent == intent,
+                SearchWeightProfile.reason == reason,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Weight profile not found")
+        session.delete(row)
+        session.commit()
+
+
+@router.get("/search/weights/defaults", response_model=list[WeightProfileResponse])
+def list_default_weights(request: Request) -> list[WeightProfileResponse]:  # noqa: ARG001
+    """Return the built-in default weights for all known intent+reason pairs."""
+    combos = [
+        ("ocr", "manual"), ("ocr", "auto-text-hint"), ("ocr", "auto-screen-text"),
+        ("ocr", "auto-code"), ("ocr", "auto-word-match"), ("ocr", "auto-phrase-code"),
+        ("semantic", "manual"), ("semantic", "auto-face"), ("semantic", "auto-travel"),
+        ("semantic", "auto-celebration"),
+        ("hybrid", "auto-mixed"), ("hybrid", "fallback"),
+    ]
+    return [
+        WeightProfileResponse(
+            intent=intent, reason=reason,
+            **{f"w_{k}": v for k, v in intent_weights(intent, reason).items()},
+        )
+        for intent, reason in combos
+    ]

@@ -90,6 +90,35 @@ class MediaAutoTagState(Base):
     media_file = relationship("MediaFile")
 
 
+class SearchWeightProfile(Base):
+    """Persisted channel weights per intent.
+
+    Each row is keyed by (intent, reason) — the same identifiers returned by
+    resolve_effective_mode(). Weights override the built-in defaults and survive
+    server restarts.
+
+    Example keys:
+      intent='ocr',      reason='manual'
+      intent='semantic', reason='auto-travel'
+      intent='hybrid',   reason='fallback'
+    """
+
+    __tablename__ = "search_weight_profiles"
+    __table_args__ = (
+        UniqueConstraint("intent", "reason", name="uq_search_weight_profile"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    intent: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    w_ocr: Mapped[float] = mapped_column(Float, nullable=False, default=0.35)
+    w_clip: Mapped[float] = mapped_column(Float, nullable=False, default=0.36)
+    w_shadow: Mapped[float] = mapped_column(Float, nullable=False, default=0.17)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class GeocodingCache(Base):
     """Cached reverse geocoding results keyed by truncated GPS coordinate.
 

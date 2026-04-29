@@ -18,6 +18,7 @@ from app.models.semantic import (
     MediaOCRBlock,
     MediaOCRGram,
     SearchDocument,
+    SearchWeightProfile,
 )
 from app.models.tag import Tag
 
@@ -27,6 +28,7 @@ __all__ = [
     "Face",
     "GeocodingCache",
     "MediaAnalysisSignal",
+    "SearchWeightProfile",
     "MediaAnnotation",
     "MediaAutoTagState",
     "MediaCaption",
