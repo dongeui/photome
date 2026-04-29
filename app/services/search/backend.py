@@ -25,7 +25,7 @@ from app.models.annotation import MediaAnnotation
 from app.models.face import Face
 from app.models.media import MediaFile
 from app.models.person import Person
-from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchFeedback, SearchWeightProfile
+from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchEvent, SearchFeedback, SearchWeightProfile
 from app.services.search.vocab import TagVocabularyCache
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
@@ -550,6 +550,31 @@ class SqlAlchemyHybridSearchBackend:
             return clip_embedding.encode_text(truncated)
         except Exception:
             return b""
+
+    def log_search_event(
+        self,
+        query: str,
+        *,
+        effective_mode: str,
+        intent: str,
+        result_count: int,
+        fallback: str | None = None,
+    ) -> None:
+        """Record a search event for implicit feedback analysis.
+
+        Silently skips if the DB write fails — logging must never break search.
+        """
+        try:
+            self._session.add(SearchEvent(
+                query=query[:512],
+                effective_mode=effective_mode,
+                intent=intent,
+                result_count=result_count,
+                fallback=fallback,
+            ))
+            self._session.flush()
+        except Exception as exc:
+            logger.debug("Failed to log search event: %s", exc)
 
     def suggest_related_tags(self, query: str, *, limit: int = 8) -> list[str]:
         """Return existing tag values that partially match the query.

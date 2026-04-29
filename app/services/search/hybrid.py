@@ -350,6 +350,19 @@ class HybridSearchService:
         if use_cache:
             _cache_set(cache_key, final, meta)
 
+        # Implicit feedback: log every search event for future analysis/tuning
+        if hasattr(self._backend, "log_search_event"):
+            try:
+                self._backend.log_search_event(
+                    query,
+                    effective_mode=effective_mode,
+                    intent=plan.intent,
+                    result_count=len(final),
+                    fallback=meta.get("fallback"),
+                )
+            except Exception:
+                pass
+
         logger.debug(
             "search query=%r mode=%s intent=%s channels=ocr:%d clip:%d shadow:%d final=%d",
             query, effective_mode, plan.intent,

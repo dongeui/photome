@@ -208,3 +208,25 @@ class SearchDocument(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     media_file = relationship("MediaFile")
+
+
+class SearchEvent(Base):
+    """Implicit feedback: lightweight log of every search query and its outcome.
+
+    Stored locally to power future auto weight tuning and zero-result analysis.
+    Not a user-facing table — records are written-only and can be pruned after N days.
+
+    fallback: None | 'date_relaxed' | 'fuzzy_corrected' — which fallback path fired
+    """
+
+    __tablename__ = "search_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    query: Mapped[str] = mapped_column(String(512), nullable=False)
+    effective_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    intent: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    result_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    fallback: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
