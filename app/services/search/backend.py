@@ -304,6 +304,9 @@ class SqlAlchemyHybridSearchBackend:
         global _fts_warning_emitted
 
         # Primary FTS (unicode61 — word boundary, reliable for English)
+        # BM25 returns negative values in FTS5: more negative = better match.
+        # We sort ASC (most negative first) and pass raw scores upstream;
+        # callers treat lower (more negative) as higher relevance.
         rows: list[tuple[str, float]] = []
         try:
             primary_rows = self._session.execute(

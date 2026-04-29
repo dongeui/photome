@@ -201,9 +201,20 @@ class FaissVectorIndex:
         norm = float(np.linalg.norm(query_vector)) or 1.0
         query_norm = (query_vector / norm).reshape(1, -1)
 
-        # Fetch more candidates when filters will reduce the result set
-        fetch_k = limit * 8 if (place_filter or date_from or date_to) else limit * 2
-        fetch_k = min(fetch_k, index.ntotal)
+        # Fetch more candidates when filters will reduce the result set.
+        # Date filters are the most restrictive: scale fetch_k by estimated coverage.
+        # A wide date range (>1 year) is nearly a full scan; narrow (<1 month) needs 10x.
+        has_filter = bool(place_filter or date_from or date_to)
+        if isinstance(date_from, datetime) and isinstance(date_to, datetime):
+            days = max(1, (date_to - date_from).days)
+            date_multiplier = max(2, min(20, 365 // days))
+        elif date_from is not None or date_to is not None:
+            date_multiplier = 10  # open-ended date filter, be generous
+        else:
+            date_multiplier = 1
+        place_multiplier = 4 if place_filter else 1
+        fetch_multiplier = max(2, date_multiplier * place_multiplier) if has_filter else 2
+        fetch_k = min(limit * fetch_multiplier, index.ntotal)
 
         distances, indices = index.search(query_norm, fetch_k)
 

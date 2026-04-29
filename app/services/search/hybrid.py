@@ -262,6 +262,7 @@ class HybridSearchService:
         apply_date_soft_scoring(merged, plan)
         apply_feedback_boost(merged, promoted_ids)
         merged = remove_near_duplicates(merged)
+        merged = apply_diversity_cap(merged)
         merged = self._reranker.rerank(merged, plan)
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
@@ -771,6 +772,41 @@ def set_match_explanations(results: list[dict]) -> None:
                 pass
 
         result["match_explanation"] = " · ".join(parts) if parts else "일치"
+
+
+def apply_diversity_cap(
+    results: list[dict],
+    *,
+    max_per_day: int = 5,
+) -> list[dict]:
+    """Limit how many results come from a single calendar day.
+
+    Prevents a single event/album from dominating results when many photos
+    share the same capture date.  Results without a date are always kept.
+    The cap is applied in score order so the highest-scoring photos per day
+    are kept.
+    """
+    day_counts: dict[str, int] = {}
+    kept: list[dict] = []
+    for result in results:
+        captured = result.get("captured_at")
+        if captured is None:
+            kept.append(result)
+            continue
+        try:
+            if isinstance(captured, str):
+                from datetime import datetime as _dt
+                captured = _dt.fromisoformat(captured)
+            day_key = captured.strftime("%Y-%m-%d")
+        except Exception:
+            kept.append(result)
+            continue
+
+        if day_counts.get(day_key, 0) < max_per_day:
+            day_counts[day_key] = day_counts.get(day_key, 0) + 1
+            kept.append(result)
+        # else: day is saturated — drop this result
+    return kept
 
 
 def remove_near_duplicates(
