@@ -15,7 +15,7 @@ from app.models.annotation import MediaAnnotation
 from app.models.face import Face
 from app.models.media import MediaFile
 from app.models.person import Person
-from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchWeightProfile
+from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchFeedback, SearchWeightProfile
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
 from app.services.search.vector import build_vector_index, VectorIndexBackend
@@ -95,6 +95,25 @@ class SqlAlchemyHybridSearchBackend:
         if row is None:
             return None
         return {"ocr": row.w_ocr, "clip": row.w_clip, "shadow": row.w_shadow}
+
+    def load_feedback_sets(self) -> tuple[set[str], set[str]]:
+        """Return (hidden_file_ids, promoted_file_ids) from SearchFeedback.
+
+        Only global feedback (query_hint='') is considered for the hidden set
+        so that query-scoped hides don't bleed into unrelated queries.
+        Promoted feedback is applied globally regardless of query_hint.
+        """
+        rows = self._session.execute(
+            select(SearchFeedback.file_id, SearchFeedback.action, SearchFeedback.query_hint)
+        ).all()
+        hidden: set[str] = set()
+        promoted: set[str] = set()
+        for file_id, action, query_hint in rows:
+            if action == "hide" and not query_hint:
+                hidden.add(str(file_id))
+            elif action == "promote":
+                promoted.add(str(file_id))
+        return hidden, promoted
 
     def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
         pattern = _like_pattern(query)

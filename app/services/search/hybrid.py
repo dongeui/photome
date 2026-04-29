@@ -100,10 +100,41 @@ class HybridSearchBackend(Protocol):
 
     def load_persisted_weights(self, intent: str, reason: str) -> dict[str, float] | None: ...
 
+    def load_feedback_sets(self) -> tuple[set[str], set[str]]:
+        """Returns (hidden_file_ids, promoted_file_ids) from SearchFeedback table."""
+        ...
+
+
+class RerankerProtocol(Protocol):
+    """Pluggable reranker interface.
+
+    A reranker receives the fused result list and the parsed query plan, and
+    returns a re-sorted list.  The default pass-through implementation lets the
+    existing RRF + boost pipeline run unchanged; a learned reranker can replace
+    it without touching search_with_meta.
+
+    To wire a custom reranker:
+        service = HybridSearchService(backend, reranker=MyReranker())
+    """
+
+    def rerank(self, results: list[dict], plan: "QueryPlan") -> list[dict]: ...
+
+
+class PassThroughReranker:
+    """Default no-op reranker: returns results unchanged."""
+
+    def rerank(self, results: list[dict], plan: "QueryPlan") -> list[dict]:  # noqa: ARG002
+        return results
+
 
 class HybridSearchService:
-    def __init__(self, backend: HybridSearchBackend) -> None:
+    def __init__(
+        self,
+        backend: HybridSearchBackend,
+        reranker: RerankerProtocol | None = None,
+    ) -> None:
         self._backend = backend
+        self._reranker: RerankerProtocol = reranker or PassThroughReranker()
 
     def search_with_meta(
         self,
@@ -190,10 +221,25 @@ class HybridSearchService:
             shadow_results,
             weights=weights,
         )
+        # Load feedback signals (hidden + promoted file IDs)
+        hidden_ids: set[str] = set()
+        promoted_ids: set[str] = set()
+        if hasattr(self._backend, "load_feedback_sets"):
+            try:
+                hidden_ids, promoted_ids = self._backend.load_feedback_sets()
+            except Exception:
+                pass
+
+        # Filter out hidden files before scoring
+        if hidden_ids:
+            merged = [r for r in merged if str(r.get("file_id", "")) not in hidden_ids]
+
         debug_candidates = [dict(item) for item in merged] if debug else None
         apply_exact_ocr_boost(cleaned, merged)
         apply_exact_tag_boost(merged)
         apply_context_filter_boost(merged, plan)
+        apply_feedback_boost(merged, promoted_ids)
+        merged = self._reranker.rerank(merged, plan)
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
@@ -461,6 +507,23 @@ def apply_context_filter_boost(results: list[dict], plan: "QueryPlan") -> None:
             result.setdefault("score_breakdown", []).append(
                 {"stage": "context_filter_bonus", "delta": bonus,
                  "rank_score": float(result.get("rank_score") or 0.0)}
+            )
+
+
+def apply_feedback_boost(results: list[dict], promoted_ids: set[str]) -> None:
+    """Apply a rank bonus to files the user explicitly promoted.
+
+    Promoted files receive a +0.15 boost so they consistently appear near the
+    top without hard-overriding relevance scores.
+    """
+    if not promoted_ids:
+        return
+    for result in results:
+        if str(result.get("file_id", "")) in promoted_ids:
+            bonus = 0.15
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "user_promoted", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
             )
 
 

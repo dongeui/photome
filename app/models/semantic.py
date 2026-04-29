@@ -162,6 +162,35 @@ class MediaCaption(Base):
     media_file = relationship("MediaFile")
 
 
+class SearchFeedback(Base):
+    """User feedback signals for search results.
+
+    action values:
+      'hide'     — exclude this file from future search results globally
+      'promote'  — boost this file's rank in search results
+      'correct_tag' — user-supplied correction; tag_correction holds the value
+
+    query_hint is optional: if provided the feedback is scoped to that query;
+    if empty it applies globally (e.g. hide always).
+    """
+
+    __tablename__ = "search_feedback"
+    __table_args__ = (
+        UniqueConstraint("file_id", "action", "query_hint", name="uq_search_feedback"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(ForeignKey("media_files.file_id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)       # hide | promote | correct_tag
+    query_hint: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    tag_correction: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    media_file = relationship("MediaFile")
+
+
 class SearchDocument(Base):
     __tablename__ = "search_documents"
 

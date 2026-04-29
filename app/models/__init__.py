@@ -18,6 +18,7 @@ from app.models.semantic import (
     MediaOCRBlock,
     MediaOCRGram,
     SearchDocument,
+    SearchFeedback,
     SearchWeightProfile,
 )
 from app.models.tag import Tag
@@ -41,5 +42,6 @@ __all__ = [
     "ProcessingJob",
     "ScanObservation",
     "SearchDocument",
+    "SearchFeedback",
     "Tag",
 ]

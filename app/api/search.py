@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import require_state
-from app.models.semantic import SearchWeightProfile
+from app.models.semantic import SearchFeedback, SearchWeightProfile
 from app.services.search import HybridSearchService
 from app.services.search.backend import SqlAlchemyHybridSearchBackend
 from app.services.search.benchmark import run_benchmark_suite
@@ -243,6 +243,101 @@ def delete_weight_profile(intent: str, reason: str, request: Request) -> None:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Weight profile not found")
+        session.delete(row)
+        session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Search feedback API  (hide / promote / correct_tag)
+# ---------------------------------------------------------------------------
+
+_VALID_ACTIONS = {"hide", "promote", "correct_tag"}
+
+
+class FeedbackRequest(BaseModel):
+    file_id: str
+    action: str                   # "hide" | "promote" | "correct_tag"
+    query_hint: str = ""          # optional: scope feedback to a query
+    tag_correction: Optional[str] = None
+
+
+class FeedbackResponse(BaseModel):
+    id: int
+    file_id: str
+    action: str
+    query_hint: str
+    tag_correction: Optional[str]
+
+
+@router.post("/search/feedback", response_model=FeedbackResponse, status_code=201)
+def add_feedback(body: FeedbackRequest, request: Request) -> FeedbackResponse:
+    """Record user feedback for a search result.
+
+    action='hide'        — permanently exclude this file from search results.
+    action='promote'     — boost this file in future searches.
+    action='correct_tag' — supply a corrected tag (tag_correction required).
+    """
+    if body.action not in _VALID_ACTIONS:
+        raise HTTPException(status_code=422, detail=f"action must be one of {sorted(_VALID_ACTIONS)}")
+    if body.action == "correct_tag" and not body.tag_correction:
+        raise HTTPException(status_code=422, detail="tag_correction is required for action='correct_tag'")
+
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        existing = session.execute(
+            select(SearchFeedback).where(
+                SearchFeedback.file_id == body.file_id,
+                SearchFeedback.action == body.action,
+                SearchFeedback.query_hint == body.query_hint,
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = SearchFeedback(
+                file_id=body.file_id,
+                action=body.action,
+                query_hint=body.query_hint,
+                tag_correction=body.tag_correction,
+            )
+            session.add(existing)
+        else:
+            existing.tag_correction = body.tag_correction
+        session.commit()
+        session.refresh(existing)
+        return FeedbackResponse(
+            id=existing.id,
+            file_id=existing.file_id,
+            action=existing.action,
+            query_hint=existing.query_hint,
+            tag_correction=existing.tag_correction,
+        )
+
+
+@router.get("/search/feedback", response_model=list[FeedbackResponse])
+def list_feedback(request: Request, action: Optional[str] = None) -> list[FeedbackResponse]:
+    """List recorded search feedback, optionally filtered by action type."""
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        stmt = select(SearchFeedback).order_by(SearchFeedback.created_at.desc())
+        if action:
+            stmt = stmt.where(SearchFeedback.action == action)
+        rows = session.scalars(stmt).all()
+        return [
+            FeedbackResponse(
+                id=r.id, file_id=r.file_id, action=r.action,
+                query_hint=r.query_hint, tag_correction=r.tag_correction,
+            )
+            for r in rows
+        ]
+
+
+@router.delete("/search/feedback/{feedback_id}", status_code=204)
+def delete_feedback(feedback_id: int, request: Request) -> None:
+    """Remove a feedback entry (undo hide/promote)."""
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        row = session.get(SearchFeedback, feedback_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Feedback entry not found")
         session.delete(row)
         session.commit()
 
