@@ -20,14 +20,56 @@ The stable identity key is `MediaFile.file_id`; `photomem`'s old integer `photo_
 - Image text/screenshot/document signal extraction: `app/services/analysis/image_signals.py`
 - Semantic persistence models: `MediaOCR`, `MediaOCRBlock`, `MediaOCRGram`, `MediaAnalysisSignal`, `MediaEmbedding`
 
-## Next Steps
+## Integration Status — All Steps Complete ✓
 
-1. Wire OCR and image-signal generation into the processing pipeline after thumbnail generation.
-2. Add CLIP embedding generation as a versioned derived asset under `embeddings/clip/<version>`.
-3. Implement a SQLAlchemy search backend for `HybridSearchService`.
-4. Add `/search` JSON API.
-5. Fold search controls into the gallery UI after the API is stable.
-6. Port `photomem` search tests to `file_id`-based fixtures.
+| # | Task | Status |
+|---|------|--------|
+| 1 | Wire OCR + image-signal generation into pipeline after thumbnails | ✅ Done (`_materialize_image_semantics`) |
+| 2 | CLIP embedding as versioned `DerivedAsset` under `embeddings/clip/<version>` | ✅ Done (registered via `catalog.register_derived_asset` + `SemanticCatalog`) |
+| 3 | SQLAlchemy search backend for `HybridSearchService` | ✅ Done (`app/services/search/backend.py`) |
+| 4 | `/search` JSON API | ✅ Done (`app/api/search.py`) |
+| 5 | Fold search controls into gallery UI | ✅ Done (gallery is now search-first) |
+| 6 | Port `photomem` tests to `file_id`-based fixtures | ✅ Done (`tests/`) |
+
+## Phase 2 — Search Quality Improvements (Complete)
+
+### Natural Language Search
+- Korean ↔ English lexicon expanded to 90+ entries (life events, places, family, seasons, holidays)
+- Filler phrase stripping before CLIP encoding (`찍은 사진`, `에서 찍은` etc.)
+- `extract_date_range()`: parses `작년`, `올해`, `이번달`, `여름`, `가을` into datetime filters
+  automatically applied when the caller does not specify a date range
+- Travel + celebration queries routed to semantic mode (`auto-travel`, `auto-celebration`)
+
+### CLIP Visual Concepts
+- Expanded from 9 → 22 categories: beach, mountain, nature, sky, cake, coffee,
+  celebration, wedding, travel, sunset, animal, group
+- Up to 5 auto-tags per image (was 3)
+
+### Tag Synonym Expansion
+- `TAG_SYNONYMS` (40+ Korean↔English pairs): searching `아기` surfaces `baby`/`infant`
+  tags and vice versa; multi-token queries each contribute synonyms
+
+### Korean OCR n-gram Boost
+- `search_by_ocr` supplements full-text LIKE results with the `media_ocr_grams` index
+  when Korean characters appear in the query and main hits are sparse
+
+### Semantic Backfill
+- `ProcessingPipeline.run_semantic_backfill()` + `POST /scan/semantic-backfill` to
+  generate CLIP embeddings for media processed before CLIP was enabled
+
+## Enabling CLIP (Optional — ~350 MB model download)
+
+CLIP is opt-in to avoid large downloads on small servers:
+
+```bash
+export PHOTOME_CLIP_ENABLED=true
+```
+
+Run backfill after enabling to generate embeddings for existing media:
+
+```
+POST /scan/semantic-backfill
+```
 
 ## Dependency Notes
 
