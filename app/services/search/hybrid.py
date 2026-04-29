@@ -234,6 +234,14 @@ class HybridSearchService:
             effective_mode, intent_reason,
             overrides=weight_overrides or persisted,
         )
+        # Adaptive weight redistribution: if CLIP channel yielded nothing,
+        # shift its budget to shadow so scoring isn't artificially deflated.
+        # This handles both "CLIP not installed" and "no embeddings yet" gracefully.
+        if not clip_results and weights.get("clip", 0.0) > 0:
+            weights = dict(weights)
+            weights["shadow"] = weights.get("shadow", 0.0) + weights["clip"]
+            weights["clip"] = 0.0
+
         merged = fuse_ranked_results(
             effective_mode,
             intent_reason,
