@@ -241,6 +241,28 @@ async def dashboard(request: Request) -> HTMLResponse:
       font-weight: 800;
       cursor: pointer;
     }}
+    .scan-actions button:disabled {{
+      opacity: .62;
+      cursor: progress;
+    }}
+    .scan-card.is-running {{
+      border-color: rgba(204,95,50,0.32);
+    }}
+    .scan-card.is-running .scan-title::after {{
+      content: "";
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-left: 8px;
+      border-radius: 50%;
+      border: 2px solid rgba(204,95,50,0.22);
+      border-top-color: var(--accent);
+      vertical-align: -2px;
+      animation: spin 850ms linear infinite;
+    }}
+    @keyframes spin {{
+      to {{ transform: rotate(360deg); }}
+    }}
     .scan-result {{
       display: none;
       margin: 0;
@@ -364,8 +386,8 @@ async def dashboard(request: Request) -> HTMLResponse:
     </section>
 
     <section class="grid">
-      <article class="card">
-        <h2>Phase 1 Polling Loop</h2>
+      <article class="card scan-card" id="phase1-card">
+        <h2 class="scan-title">Phase 1 Polling Loop</h2>
         <p class="sub">Source-driven ingest from NAS originals into local cache and derived assets.</p>
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if scheduler['enabled'] else 'status-warn'}">{escape(str(scheduler['enabled']))}</span></span>
@@ -385,7 +407,7 @@ async def dashboard(request: Request) -> HTMLResponse:
             <textarea id="phase1-source-roots" name="source_roots" spellcheck="false">{source_roots_text}</textarea>
           </label>
           <div class="scan-actions">
-            <button type="submit">Run Phase 1 Scan</button>
+            <button type="submit" id="phase1-scan-button">Run Phase 1 Scan</button>
             <label><input type="checkbox" id="phase1-full-scan" name="full_scan"> Full scan</label>
           </div>
           <pre class="scan-result" id="phase1-scan-result" aria-live="polite"></pre>
@@ -462,33 +484,65 @@ async def dashboard(request: Request) -> HTMLResponse:
   <script>
     const scanForm = document.getElementById("phase1-scan-form");
     const scanResult = document.getElementById("phase1-scan-result");
+    const scanCard = document.getElementById("phase1-card");
+    const scanButton = document.getElementById("phase1-scan-button");
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    function renderScanJob(job) {{
+      const summary = job?.result?.summary || {{}};
+      const processed = job?.result?.processed || {{}};
+      const lines = [
+        `status: ${{job?.status || "unknown"}}`,
+      ];
+      if (job?.status === "queued" || job?.status === "running") {{
+        lines.push(`job: ${{job?.job_id || ""}}`);
+        if (job?.started_at) lines.push(`started: ${{job.started_at}}`);
+        return lines.join("\\n");
+      }}
+      lines.push(
+        `scanned: ${{summary.scanned ?? 0}}`,
+        `created: ${{summary.created ?? 0}}`,
+        `updated: ${{summary.updated ?? 0}}`,
+        `moved: ${{summary.moved ?? 0}}`,
+        `missing: ${{summary.missing ?? 0}}`,
+        `failed: ${{summary.failed ?? 0}}`,
+        `processed: ${{processed.succeeded ?? 0}} succeeded, ${{processed.failed ?? 0}} failed`,
+      );
+      if (job?.error_message) lines.push(`error: ${{job.error_message}}`);
+      return lines.join("\\n");
+    }}
+    async function pollScanJob(jobId) {{
+      while (true) {{
+        const response = await fetch(`/scan/jobs/${{encodeURIComponent(jobId)}}`, {{ cache: "no-store" }});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        const job = payload.job;
+        scanResult.textContent = renderScanJob(job);
+        if (job.status !== "queued" && job.status !== "running") return job;
+        await sleep(1200);
+      }}
+    }}
     scanForm?.addEventListener("submit", async (event) => {{
       event.preventDefault();
       scanResult.classList.add("visible");
-      scanResult.textContent = "Running scan...";
+      scanCard.classList.add("is-running");
+      scanButton.disabled = true;
+      scanResult.textContent = "Starting scan...";
       const sourceRoots = document.getElementById("phase1-source-roots").value;
       const fullScan = document.getElementById("phase1-full-scan").checked;
       const params = new URLSearchParams();
       if (sourceRoots.trim()) params.set("source_roots", sourceRoots);
       if (fullScan) params.set("full_scan", "true");
       try {{
-        const response = await fetch(`/scan?${{params.toString()}}`, {{ method: "POST" }});
+        const response = await fetch(`/scan/async?${{params.toString()}}`, {{ method: "POST" }});
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
-        const summary = payload.job?.result?.summary || {{}};
-        const processed = payload.job?.result?.processed || {{}};
-        scanResult.textContent = [
-          `status: ${{payload.job?.status}}`,
-          `scanned: ${{summary.scanned ?? 0}}`,
-          `created: ${{summary.created ?? 0}}`,
-          `updated: ${{summary.updated ?? 0}}`,
-          `moved: ${{summary.moved ?? 0}}`,
-          `missing: ${{summary.missing ?? 0}}`,
-          `failed: ${{summary.failed ?? 0}}`,
-          `processed: ${{processed.succeeded ?? 0}} succeeded, ${{processed.failed ?? 0}} failed`,
-        ].join("\\n");
+        scanResult.textContent = renderScanJob(payload.job);
+        await pollScanJob(payload.job.job_id);
       }} catch (error) {{
         scanResult.textContent = `error: ${{error.message}}`;
+      }} finally {{
+        scanCard.classList.remove("is-running");
+        scanButton.disabled = false;
       }}
     }});
 

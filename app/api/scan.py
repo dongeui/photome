@@ -6,9 +6,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 
 from app.api.deps import require_state
+from app.models.job import ProcessingJob
 
 
 router = APIRouter(tags=["scan"])
@@ -30,6 +31,51 @@ async def trigger_scan(
         source_roots=requested_roots,
     )
     return {"job": asdict(summary)}
+
+
+@router.post("/scan/async", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_scan_async(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    full_scan: bool = Query(default=False),
+    source_root: Optional[List[str]] = Query(default=None),
+    source_roots: Optional[str] = Query(default=None),
+) -> dict[str, Any]:
+    pipeline = require_state(request, "pipeline")
+    requested_roots = _parse_source_roots(source_root=source_root, source_roots=source_roots)
+    summary = pipeline.submit_scan_job(
+        full_scan=full_scan,
+        run_now=False,
+        trigger="api-async",
+        source_roots=requested_roots,
+    )
+    background_tasks.add_task(pipeline.run_scan_job, summary.job_id)
+    return {"job": asdict(summary)}
+
+
+@router.get("/scan/jobs/{job_id}")
+async def read_scan_job(request: Request, job_id: str) -> dict[str, Any]:
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        job = session.get(ProcessingJob, job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="scan job not found")
+        return {
+            "job": {
+                "job_id": job.id,
+                "job_kind": job.job_kind,
+                "status": job.status,
+                "payload": job.payload_json,
+                "result": job.result_json,
+                "error_stage": job.error_stage,
+                "error_message": job.error_message,
+                "attempts": job.attempts,
+                "enqueued_at": job.enqueued_at,
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
+                "updated_at": job.updated_at,
+            }
+        }
 
 
 @router.post("/scan/semantic-backfill")

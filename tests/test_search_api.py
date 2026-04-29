@@ -243,6 +243,26 @@ def test_scan_accepts_source_roots_query_override(client: TestClient, tmp_path: 
     assert search.json()["total"] == 1
 
 
+def test_async_scan_starts_job_and_exposes_status(client: TestClient, tmp_path: Path) -> None:
+    selected_root = tmp_path / "async-source"
+    selected_root.mkdir()
+    create_image(selected_root / "async-receipt.jpg")
+    client.post("/scan", params={"source_roots": str(selected_root)})
+    time.sleep(SCAN_DELAY_SECONDS)
+
+    response = client.post("/scan/async", params={"source_roots": str(selected_root)})
+
+    assert response.status_code == 202
+    job = response.json()["job"]
+    assert job["status"] in {"queued", "succeeded"}
+    status_response = client.get(f"/scan/jobs/{job['job_id']}")
+    assert status_response.status_code == 200
+    status_job = status_response.json()["job"]
+    assert status_job["job_id"] == job["job_id"]
+    assert status_job["status"] == "succeeded"
+    assert status_job["result"]["summary"]["created"] == 1
+
+
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:
     response = client.post("/scan", params={"source_roots": str(tmp_path / "missing")})
 
