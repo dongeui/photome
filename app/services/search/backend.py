@@ -9,13 +9,15 @@ from typing import Any
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.models.face import Face
+import os
+
 from app.models.annotation import MediaAnnotation
+from app.models.face import Face
 from app.models.media import MediaFile
+from app.models.person import Person
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
-import os
 from app.services.search.vector import build_vector_index, VectorIndexBackend
 
 FACE_HINTS = {
@@ -287,6 +289,11 @@ class SqlAlchemyHybridSearchBackend:
         for token in lowered.split():
             search_values |= TAG_SYNONYMS.get(token, set())
 
+        # Resolve named persons: if any token matches a Person.display_name,
+        # add their person-XXXXXX tag so the face cluster is found
+        person_tag_ids = self._resolve_person_tag_ids(query)
+        search_values.update(person_tag_ids)
+
         exact_statement = (
             select(MediaFile, Tag.tag_value)
             .join(Tag, Tag.file_id == MediaFile.file_id)
@@ -420,6 +427,23 @@ class SqlAlchemyHybridSearchBackend:
             .limit(limit)
         )
         return [value for value, _ in self._session.execute(statement)]
+
+    def _resolve_person_tag_ids(self, query: str) -> set[str]:
+        """Return person tag values (e.g. 'person-abc123') for any Person whose
+        display_name matches a token in the query."""
+        lowered = query.casefold()
+        tokens = [t for t in lowered.split() if len(t) >= 2]
+        if not tokens:
+            return set()
+        persons = self._session.scalars(select(Person)).all()
+        matched_ids: set[str] = set()
+        for person in persons:
+            name = person.display_name.casefold()
+            if any(token in name or name in token for token in tokens):
+                # person tags are stored as "person-{person_id}" style values
+                matched_ids.add(f"person-{person.id:06d}")
+                matched_ids.add(person.display_name.casefold())
+        return matched_ids
 
     def _result_dict(
         self,

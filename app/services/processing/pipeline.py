@@ -26,6 +26,8 @@ from app.services.analysis import auto_tags, image_signals
 from app.services.caption import CaptionProvider
 from app.services.caption.registry import get_caption_provider
 from app.services.embedding import clip as clip_embedding
+from app.services.geocoding import GeocodingProvider, NominatimProvider
+from app.services.geocoding.cached import CachedGeocodingService
 from app.services.fingerprint.service import FingerprintService
 from app.services.metadata.service import MetadataService
 from app.services.ocr import extract as extract_ocr
@@ -93,6 +95,8 @@ class ProcessingPipeline:
         semantic_search_version: str = "search-v1",
         semantic_caption_version: str = "caption-v1",
         caption_provider: CaptionProvider | None = None,
+        geocoding_provider: GeocodingProvider | None = None,
+        geocoding_enabled: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._scanner = scanner
@@ -113,6 +117,8 @@ class ProcessingPipeline:
         self._semantic_search_version = semantic_search_version
         self._semantic_caption_version = semantic_caption_version
         self._caption_provider: CaptionProvider | None = caption_provider if caption_provider is not None else get_caption_provider()
+        self._geocoding_enabled = geocoding_enabled
+        self._geocoding_provider: GeocodingProvider = geocoding_provider or NominatimProvider()
         self._semantic_maintenance_lock = Lock()
 
     def submit_scan_job(
@@ -407,7 +413,7 @@ class ProcessingPipeline:
         result: dict[str, Any] = {"file_id": media_file.file_id, "assets": []}
         preserved_tags, existing_place_tags, existing_person_tags = self._split_existing_tags(media_file.tags)
         preserved_tags = [tag for tag in preserved_tags if tag.tag_type != "auto"]
-        place_tags = self._materialize_place_tags(media_file)
+        place_tags = self._materialize_place_tags(media_file, session=session)
         person_tags = existing_person_tags
         # Filename and datetime-derived auto tags (no ML, always fast)
         filename_tags = auto_tags.tags_from_filename(media_file.filename)
@@ -582,7 +588,7 @@ class ProcessingPipeline:
             "checksum": None,
         }
 
-    def _materialize_place_tags(self, media_file: MediaFile) -> list[MediaTagInput]:
+    def _materialize_place_tags(self, media_file: MediaFile, *, session: Session | None = None) -> list[MediaTagInput]:
         metadata = media_file.metadata_json
         if not isinstance(metadata, dict):
             return []
@@ -598,10 +604,22 @@ class ProcessingPipeline:
 
         grouped = f"{latitude:.{self._place_tag_precision}f},{longitude:.{self._place_tag_precision}f}"
         detailed = f"{latitude:.7f},{longitude:.7f}"
-        return [
+        tags = [
             MediaTagInput(tag_type="place", tag_value=grouped),
             MediaTagInput(tag_type="place_detail", tag_value=detailed),
         ]
+
+        if self._geocoding_enabled and session is not None:
+            try:
+                geo = CachedGeocodingService(session, self._geocoding_provider, precision=self._place_tag_precision)
+                result = geo.reverse(latitude, longitude)
+                if result:
+                    for place_name in result.place_tags():
+                        tags.append(MediaTagInput(tag_type="place", tag_value=place_name))
+            except Exception as exc:
+                logger.debug("geocoding failed for %s: %s", media_file.file_id, exc)
+
+        return tags
 
     def _materialize_faces(self, session: Session, media_file: MediaFile) -> FaceMaterializationResult | None:
         if self._face_analysis_service is None:

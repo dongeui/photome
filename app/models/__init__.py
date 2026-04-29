@@ -9,6 +9,7 @@ from app.models.job import ProcessingJob
 from app.models.observation import ScanObservation
 from app.models.person import Person
 from app.models.semantic import (
+    GeocodingCache,
     MediaAnalysisSignal,
     MediaAutoTagState,
     MediaCaption,
@@ -24,6 +25,7 @@ __all__ = [
     "Base",
     "DerivedAsset",
     "Face",
+    "GeocodingCache",
     "MediaAnalysisSignal",
     "MediaAnnotation",
     "MediaAutoTagState",

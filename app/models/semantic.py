@@ -90,6 +90,26 @@ class MediaAutoTagState(Base):
     media_file = relationship("MediaFile")
 
 
+class GeocodingCache(Base):
+    """Cached reverse geocoding results keyed by truncated GPS coordinate.
+
+    The key is "{lat:.3f},{lon:.3f}" (same precision used for place tags)
+    so nearby photos share a single cache entry.
+    """
+
+    __tablename__ = "geocoding_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    country: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    region: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    city: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    place: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class MediaCaption(Base):
     """VLM-generated caption for a media file.
 
