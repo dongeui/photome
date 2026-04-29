@@ -29,4 +29,9 @@
 | 시간 표현 정규화 | `작년`, `지난달`, `2024년 여름` | 쿼리 시점 기준으로 date range 환산 | 파서가 절대 범위로 변환 후 메타 필터 적용 | High | No |
 | 임베딩 모델 버전 업그레이드 | `embedding_clip` asset_version 상승 | 기존 데이터 검색 품질 유지 | 야간 배치 또는 스크립트로 재인덱싱, 구버전 임베딩은 즉시 삭제되지 않음 | Medium | No |
 | OCR 텍스트 검색(선택) | 메뉴판 이미지 처리 | OCR 텍스트로 검색 가능 | `tag_type="ocr_text"` 저장, 한글 인식 성공 | Low | No |
-
+| Phase 2 search document 생성 | 신규 이미지 처리 완료 | `/search?q=filename-or-tag` 결과 반환 | `search_documents` row 생성, `version=semantic_search_version` | Critical | Yes |
+| Phase 2 사이클 중복 방지 | semantic scheduler/manual trigger 반복 | 이미 처리된 항목은 재처리하지 않음 | maintenance pending=0, lock 중복 실행 skip 가능 | Critical | Yes |
+| FTS5 keyword index | search document 생성 후 keyword 검색 | keyword query가 빠르게 결과 반환 | `search_documents_fts`에 file_id index row 존재 | High | Yes |
+| 런타임 source root scan | Dashboard/API에서 경로 입력 | 지정 경로만 scan 가능 | scan job payload/result에 resolved `source_roots` 기록 | High | Yes |
+| QueryPlanner intent 분해 | `작년 여름 바다에서 가족이랑 찍은 사진` 검색 | meta에 구조화 query plan 반환 | date/person/place/visual intent 분해 | Critical | Yes |
+| Vector backend abstraction | semantic search 실행 | vector backend 교체 가능 | `VectorIndexBackend` 인터페이스와 local NumPy 구현 사용 | High | Yes |

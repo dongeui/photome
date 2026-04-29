@@ -7,10 +7,11 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import text
 
 from app.core.settings import load_settings
 from app.main import create_app
-from app.models.semantic import MediaAnalysisSignal, MediaOCR
+from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument
 
 
 SCAN_DELAY_SECONDS = 1.1
@@ -62,6 +63,40 @@ def test_search_finds_scanned_media_by_filename_and_semantic_rows_exist(
     with client.app.state.database.session_factory() as session:
         assert session.get(MediaOCR, file_id) is not None
         assert session.get(MediaAnalysisSignal, file_id) is not None
+        search_document = session.get(SearchDocument, file_id)
+        assert search_document is not None
+        assert "vacation-receipt.jpg" in search_document.search_text
+        assert search_document.version == client.app.state.settings.semantic_search_version
+        indexed = session.execute(
+            text("SELECT file_id FROM search_documents_fts WHERE search_documents_fts MATCH 'receipt'")
+        ).all()
+        assert indexed == [(file_id,)]
+
+
+def test_semantic_maintenance_only_builds_missing_search_documents(
+    client: TestClient,
+    source_root: Path,
+) -> None:
+    create_image(source_root / "cycle-receipt.jpg")
+    scan_twice(client)
+    item = client.get("/search", params={"q": "receipt"}).json()["items"][0]
+
+    no_op = client.app.state.pipeline.run_semantic_maintenance()
+    assert no_op["pending"] == 0
+    assert no_op["succeeded"] == 0
+
+    with client.app.state.database.session_factory() as session:
+        document = session.get(SearchDocument, item["file_id"])
+        assert document is not None
+        session.delete(document)
+        session.commit()
+
+    rebuilt = client.app.state.pipeline.run_semantic_maintenance()
+    assert rebuilt["pending"] == 1
+    assert rebuilt["succeeded"] == 1
+
+    second_no_op = client.post("/scan/semantic-maintenance").json()
+    assert second_no_op["pending"] == 0
 
 
 def test_media_annotation_updates_display_name_description_and_custom_tags(
@@ -107,6 +142,33 @@ def test_media_annotation_updates_display_name_description_and_custom_tags(
     gallery_title_search = client.get("/gallery", params={"q": "Trip"}).text
     assert "Trip receipt" in gallery_title_search
     assert "Dinner receipt from the family trip." in gallery_title_search
+
+
+def test_scan_accepts_source_roots_query_override(client: TestClient, tmp_path: Path) -> None:
+    selected_root = tmp_path / "selected-source"
+    selected_root.mkdir()
+    create_image(selected_root / "manual-path-receipt.jpg")
+
+    client.post("/scan", params={"source_roots": str(selected_root)})
+    time.sleep(SCAN_DELAY_SECONDS)
+    response = client.post("/scan", params={"source_roots": str(selected_root)})
+
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["payload"]["source_roots"] == [str(selected_root.resolve())]
+    assert job["result"]["source_roots"] == [str(selected_root.resolve())]
+    assert job["result"]["summary"]["created"] == 1
+
+    search = client.get("/search", params={"q": "receipt"})
+    assert search.status_code == 200
+    assert search.json()["total"] == 1
+
+
+def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:
+    response = client.post("/scan", params={"source_roots": str(tmp_path / "missing")})
+
+    assert response.status_code == 400
+    assert "Source root does not exist" in response.json()["detail"]
 
 
 def scan_twice(client: TestClient) -> tuple[dict, dict]:

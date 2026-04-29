@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import os
 from pathlib import Path
@@ -29,6 +29,9 @@ class ScannerService:
     @property
     def config(self) -> ScannerConfig:
         return self._config
+
+    def with_source_roots(self, source_roots: tuple[Path, ...]) -> "ScannerService":
+        return ScannerService(replace(self._config, source_roots=source_roots))
 
     def iter_files(self) -> Iterator[FileScanRecord]:
         for source_root in self._config.source_roots:

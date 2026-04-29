@@ -47,15 +47,19 @@
 - [ ] T17 CLIP image embedding (멀티모달 임베딩)
 - [ ] T18 vector search layer (텍스트 → top-K 벡터 조회)
 - [ ] T19 person labeling API (자동 person 라벨 + 그룹)
-- [ ] T20 OCR extraction (이미지 내 한국어 텍스트)
+- [x] T20 OCR extraction (이미지 내 한국어 텍스트)
 - [ ] T21 VLM auto-caption (이미지별 한국어 캡션)
+- [x] T21a search document materialization (OCR/태그/사람/장소/신호/임베딩 ref 집계)
+- [x] T21b Phase 2 semantic maintenance cycle (missing/stale/version mismatch만 처리)
+- [x] T21c SQLite FTS5 keyword index for search documents
+- [x] T21d vector index backend abstraction (`LocalNumpyVectorIndex` 기본 구현)
 
 ### Phase 7 - Natural Language Search
 
 쿼리를 해석하고 하이브리드 검색으로 결과를 내는 단계다.
 
-- [ ] T22 NL query parser (쿼리 → 구조화 JSON)
-- [ ] T23 hybrid NL search endpoint (메타 필터 + 벡터 랭킹)
+- [x] T22 NL query parser (쿼리 → 구조화 JSON)
+- [x] T23 hybrid NL search endpoint (메타 필터 + 벡터 랭킹)
 - [ ] T24 NL QA scenario expansion (회귀 방지)
 
 ## Task Split Ready Table
@@ -114,20 +118,25 @@
 
 ## Second Execution Order
 
-T15 QA suite 종료 이후 Phase 6/7을 아래 순서로 착수한다. 괄호는 병렬 가능 쌍을 의미한다.
+Phase 2는 Phase 1과 별도 사이클로 돈다. Phase 1이 새 사진을 `thumb_done`/`analysis_done` 상태로 만든 뒤, Phase 2는 매 사이클마다 아직 semantic 결과가 없거나 버전이 맞지 않거나 원본 semantic source가 갱신된 항목만 처리한다.
 
-1. (`T16` geocoding, `T17` embedding) 병렬
-2. `T18` vector search
-3. `T19` person labeling
-4. `T22` query parser
-5. `T23` hybrid search endpoint
-6. `T24` NL scenario QA
-7. (선택) `T20` OCR, `T21` VLM caption — 품질 향상 후속 과제
+1. [x] `search_documents` 정규화 테이블 생성
+2. [x] `run_semantic_maintenance()` 사이클 구현 및 중복 실행 lock 추가
+3. [x] SQLite FTS5 keyword index 연결
+4. [x] `T18` vector index abstraction: local NumPy → FAISS/LanceDB/Qdrant 교체 가능 구조
+5. [x] `T22` structured query planner: keyword/OCR/person/place/date/visual intent 분리
+6. [ ] `T24` 이미지 없이도 돌 수 있는 synthetic NL scenario QA 확장
+7. [ ] `T19` people/person group API
+8. [ ] `T16` reverse geocoding provider/cache
+9. [ ] `T21` VLM caption adapter
 
 ## Phase 6/7 Risk Notes
 
+- Phase 2 검색 종착지 설계는 `docs/engineering/PHASE2_SEARCH_TECH_REVIEW.md`를 기준으로 한다.
 - 모델 배포: 초기에는 서버 호스트(Mac mini)에서 CPU 추론 가정. GPU 워커 분리는 T21 이후 리소스 병목이 확인되면 별도 태스크로 분할.
 - 스토리지: CLIP 임베딩은 기존 `embeddings_root` 하위에 shard 구조로 저장한다. 얼굴 임베딩(`embeddings/faces/v1/**`)과 디렉터리 네임스페이스를 분리한다 (`embeddings/clip/<version>/**`).
-- 재처리: 임베딩/캡션 모델 버전 업그레이드 시 재생성은 `DerivedAsset.asset_version`으로 분기. 전량 재인덱싱은 스케줄러 야간 잡 또는 별도 스크립트로 수행.
+- 재처리: Phase 2는 전량 반복 실행하지 않는다. `SearchDocument.version`, `source_updated_at`, 각 semantic output version을 기준으로 missing/stale/version mismatch만 처리한다. 전량 재인덱싱은 명시적 rebuild 작업으로 분리한다.
+- 검색 인덱스: `search_documents`가 canonical semantic 검색 문서이고, SQLite FTS5는 acceleration layer다. FTS5 실패 시 LIKE fallback을 유지한다.
+- 쿼리 계획: 초기 `QueryPlanner`는 deterministic rule-based다. 쿼리를 keyword/OCR/person/place/date/visual intent로 분해하고 검색 meta에 노출한다. LLM planner는 schema와 회귀가 안정화된 뒤 optional provider로 붙인다.
+- 벡터 검색: `VectorIndexBackend` 인터페이스를 기준으로 둔다. 현재 기본 구현은 exact local NumPy이며, 성능 임계점 확인 후 FAISS/LanceDB/Qdrant adapter를 추가한다.
 - AGENTS.md 범위: 실행 정책은 `T1~T24`로 이미 확장되어 있다. Phase 6/7 도중 범위 이탈(T25 이상) 요청이 발생하면 Orchestrator가 먼저 `AGENTS.md`를 갱신한 뒤 Planner가 신규 태스크 카드를 추가한다.
-

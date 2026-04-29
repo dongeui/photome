@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         semantic_ocr_version=settings.semantic_ocr_version,
         semantic_embedding_version=settings.semantic_embedding_version,
         semantic_auto_tag_version=settings.semantic_auto_tag_version,
+        semantic_search_version=settings.semantic_search_version,
     )
     scheduler = SchedulerService(settings, pipeline)
 
@@ -95,7 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.pipeline = pipeline
     app.state.scheduler = scheduler
 
-    if scheduler.enabled:
+    if scheduler.enabled or settings.semantic_scheduler_enabled:
         scheduler.start()
 
     logger.info(

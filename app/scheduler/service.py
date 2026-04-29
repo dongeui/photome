@@ -38,6 +38,7 @@ class SchedulerService:
         self._settings = settings
         self._pipeline = pipeline
         self._enabled = settings.scheduler_enabled
+        self._thread_enabled = settings.scheduler_enabled or settings.semantic_scheduler_enabled
         self._running = False
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -50,7 +51,7 @@ class SchedulerService:
         return self._enabled
 
     def start(self) -> None:
-        if not self._enabled or self._running:
+        if not self._thread_enabled or self._running:
             return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, name="photome-scheduler", daemon=True)
@@ -77,6 +78,7 @@ class SchedulerService:
             self._pipeline.submit_scan_job(full_scan=True, trigger="scheduler-full")
             self._last_full_scan_at = now
         if self._settings.semantic_scheduler_enabled and self._is_semantic_maintenance_due(now):
+            self._pipeline.run_semantic_maintenance()
             self._last_semantic_maintenance_at = now
         return self.snapshot(now)
 

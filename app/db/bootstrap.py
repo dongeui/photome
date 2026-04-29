@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -44,6 +45,30 @@ def build_database_state(settings: AppSettings) -> DatabaseState:
     _ensure_runtime_directories(settings)
     engine = create_engine_for_settings(settings)
     Base.metadata.create_all(engine)
+    _ensure_search_document_fts(engine)
     session_factory = create_session_factory(engine)
     logger.info("database bootstrapped", extra={"database_url": settings.database_url})
     return DatabaseState(settings=settings, engine=engine, session_factory=session_factory)
+
+
+def _ensure_search_document_fts(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as connection:
+        try:
+            connection.execute(
+                text(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts
+                    USING fts5(
+                        file_id UNINDEXED,
+                        search_text,
+                        keyword_text,
+                        semantic_text,
+                        tokenize='unicode61'
+                    )
+                    """
+                )
+            )
+        except Exception as exc:
+            logger.warning("search document FTS unavailable", extra={"error": str(exc)})

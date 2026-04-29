@@ -8,6 +8,7 @@ import json
 import logging
 import math
 from pathlib import Path
+from threading import Lock
 from tempfile import NamedTemporaryFile
 from typing import Any
 from uuid import uuid4
@@ -87,6 +88,7 @@ class ProcessingPipeline:
         semantic_ocr_version: str = "ocr-v1",
         semantic_embedding_version: str = "embedding-v1",
         semantic_auto_tag_version: str = "auto-v1",
+        semantic_search_version: str = "search-v1",
     ) -> None:
         self._session_factory = session_factory
         self._scanner = scanner
@@ -104,13 +106,26 @@ class ProcessingPipeline:
         self._semantic_ocr_version = semantic_ocr_version
         self._semantic_embedding_version = semantic_embedding_version
         self._semantic_auto_tag_version = semantic_auto_tag_version
+        self._semantic_search_version = semantic_search_version
+        self._semantic_maintenance_lock = Lock()
 
-    def submit_scan_job(self, *, full_scan: bool = False, run_now: bool = True, trigger: str = "manual") -> PipelineSummary:
+    def submit_scan_job(
+        self,
+        *,
+        full_scan: bool = False,
+        run_now: bool = True,
+        trigger: str = "manual",
+        source_roots: tuple[Path, ...] | None = None,
+    ) -> PipelineSummary:
+        payload: dict[str, Any] = {"full_scan": full_scan, "trigger": trigger}
+        if source_roots is not None:
+            payload["source_roots"] = [str(path) for path in source_roots]
+
         with self._session_factory() as session:
             job = ProcessingJob(
                 job_kind=ProcessingJobKind.SCAN.value,
                 status=ProcessingJobState.QUEUED.value,
-                payload_json={"full_scan": full_scan, "trigger": trigger},
+                payload_json=payload,
                 attempts=0,
             )
             session.add(job)
@@ -118,7 +133,7 @@ class ProcessingPipeline:
 
             if run_now:
                 try:
-                    self._run_scan_job(session, job, full_scan=full_scan)
+                    self._run_scan_job(session, job, full_scan=full_scan, source_roots=source_roots)
                 except Exception:
                     session.commit()
                     return self._to_summary(job)
@@ -133,9 +148,11 @@ class ProcessingPipeline:
                 raise ValueError(f"Unknown job_id: {job_id}")
             if job.job_kind != ProcessingJobKind.SCAN.value:
                 raise ValueError(f"Job {job_id} is not a scan job")
-            full_scan = bool((job.payload_json or {}).get("full_scan"))
+            payload = job.payload_json or {}
+            full_scan = bool(payload.get("full_scan"))
+            source_roots = _coerce_source_roots(payload.get("source_roots"))
             try:
-                self._run_scan_job(session, job, full_scan=full_scan)
+                self._run_scan_job(session, job, full_scan=full_scan, source_roots=source_roots)
             except Exception:
                 session.commit()
                 return self._to_summary(job)
@@ -220,6 +237,7 @@ class ProcessingPipeline:
                                 tags=merged,
                                 version=self._semantic_auto_tag_version,
                             )
+                        semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
                         succeeded += 1
                     else:
                         failed += 1
@@ -239,6 +257,46 @@ class ProcessingPipeline:
                 "has_more": len(pending) == batch_size,
             }
 
+    def run_semantic_maintenance(self, *, batch_size: int = 100) -> dict[str, Any]:
+        """Refresh Phase 2 search documents only for media that need it.
+
+        The scheduler calls this in cycles. A non-blocking lock prevents two
+        cycles from rebuilding the same semantic rows concurrently.
+        """
+        if not self._semantic_maintenance_lock.acquire(blocking=False):
+            return {"skipped": True, "reason": "already_running", "pending": 0, "succeeded": 0, "failed": 0}
+
+        try:
+            with self._session_factory() as session:
+                semantic_catalog = SemanticCatalog(session)
+                pending = semantic_catalog.list_media_needing_search_document(
+                    version=self._semantic_search_version,
+                    limit=batch_size,
+                )
+                succeeded = failed = 0
+                for media_file in pending:
+                    try:
+                        semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
+                        succeeded += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "semantic maintenance failed",
+                            extra={"file_id": media_file.file_id, "error": str(exc)},
+                        )
+                        failed += 1
+
+                session.commit()
+                return {
+                    "skipped": False,
+                    "pending": len(pending),
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "has_more": len(pending) == batch_size,
+                    "version": self._semantic_search_version,
+                }
+        finally:
+            self._semantic_maintenance_lock.release()
+
     def status_snapshot(self) -> dict[str, Any]:
         with self._session_factory() as session:
             catalog = MediaCatalog(session)
@@ -256,7 +314,14 @@ class ProcessingPipeline:
                 "jobs": job_counts,
             }
 
-    def _run_scan_job(self, session: Session, job: ProcessingJob, *, full_scan: bool) -> IncrementalScanSummary:
+    def _run_scan_job(
+        self,
+        session: Session,
+        job: ProcessingJob,
+        *,
+        full_scan: bool,
+        source_roots: tuple[Path, ...] | None = None,
+    ) -> IncrementalScanSummary:
         now = datetime.utcnow()
         job.status = ProcessingJobState.RUNNING.value
         job.started_at = job.started_at or now
@@ -266,8 +331,9 @@ class ProcessingPipeline:
         session.flush()
 
         try:
+            scanner = self._scanner.with_source_roots(source_roots) if source_roots is not None else self._scanner
             scan_summary = IncrementalScanService(
-                self._scanner,
+                scanner,
                 self._fingerprint_service,
                 self._metadata_service,
             ).run(session)
@@ -284,6 +350,7 @@ class ProcessingPipeline:
         job.status = ProcessingJobState.SUCCEEDED.value
         job.result_json = {
             "full_scan": full_scan,
+            "source_roots": [str(path) for path in source_roots] if source_roots is not None else None,
             "summary": asdict(scan_summary),
             "processed": processed_summary,
         }
@@ -384,6 +451,9 @@ class ProcessingPipeline:
             result["tags"] = [{"type": tag.tag_type, "value": tag.tag_value} for tag in tags]
         elif place_tags or existing_place_tags or person_tags or existing_person_tags:
             result["tags"] = []
+
+        SemanticCatalog(session).upsert_search_document(media_file, version=self._semantic_search_version)
+        result["search_document"] = {"version": self._semantic_search_version}
 
         if analysis_warnings:
             result["analysis_warnings"] = analysis_warnings
@@ -813,6 +883,13 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_source_roots(value: Any) -> tuple[Path, ...] | None:
+    if not isinstance(value, list):
+        return None
+    roots = [Path(str(item)).expanduser().resolve() for item in value if str(item).strip()]
+    return tuple(roots) if roots else None
 
 
 def _coerce_int(value: Any) -> int | None:

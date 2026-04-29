@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.search.hybrid import HybridSearchService, resolve_effective_mode
+from app.services.search.planner import plan_query
 from app.services.search.query_translate import expand_for_clip, normalize_query
 
 
@@ -71,12 +72,23 @@ def test_effective_mode_routes_short_ocr_hits_to_ocr() -> None:
     assert reason == "auto-word-match"
 
 
+def test_query_planner_extracts_image_search_intents() -> None:
+    plan = plan_query("작년 여름 바다에서 가족이랑 찍은 사진")
+
+    assert plan.intent == "visual"
+    assert plan.date_from is not None
+    assert "바다" in plan.place_terms
+    assert "가족" in plan.person_terms
+    assert any("sea" in variant or "ocean" in variant for variant in plan.visual_queries)
+
+
 def test_hybrid_search_prefers_cross_channel_agreement() -> None:
     service = HybridSearchService(FakeBackend())
 
     results, meta = service.search_with_meta("동의", limit=5, mode="hybrid")
 
     assert meta["effective_mode"] == "ocr"
+    assert meta["query_plan"]["intent"] == "hybrid"
     assert results[0]["file_id"] == "file-a"
     assert results[0]["match_reason"] == "ocr"
     assert results[0]["rank_score"] == 1.0

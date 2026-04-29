@@ -1,5 +1,7 @@
 # Architecture
 
+Phase 2 검색 종착지 설계와 기술 선택 기준은 `docs/engineering/PHASE2_SEARCH_TECH_REVIEW.md`를 따른다.
+
 ## Topology
 
 ```text
@@ -48,13 +50,42 @@ Stage 1 — ingest and caching:
 - `scheduler`: polling scan + daily full scan
 - `api`: list/detail/filter/scan/status endpoints
 
-Stage 2 — semantic enrichment and NL search (planned, T16~T24):
+Stage 2 — semantic enrichment and NL search:
 
 - `geocoding`: GPS 좌표 → 지명 계층 태그, 결과 캐시
 - `embedding`: 이미지 멀티모달 임베딩(CLIP/SigLIP) 추출 및 저장
-- `ocr` (선택): 이미지 내 텍스트 추출
+- `ocr`: 이미지 내 텍스트 추출
 - `caption` (선택): VLM 기반 자연어 캡션 생성
-- `search`: 자연어 쿼리 파서 + 하이브리드 검색(메타 필터 + 벡터 랭킹)
+- `semantic`: OCR/태그/사람/장소/신호/임베딩 ref를 `search_documents`로 집계
+- `search.planner`: 쿼리를 keyword/OCR/person/place/date/visual intent로 분해
+- `search.vector`: `VectorIndexBackend` 인터페이스와 `LocalNumpyVectorIndex` 기본 구현
+- `search`: FTS5 keyword search + OCR/tag/shadow document + CLIP vector 후보를 RRF로 결합
+
+## Phase 2 Cycle Contract
+
+- Phase 2는 Phase 1과 독립된 사이클로 돈다.
+- Phase 1이 새 파일을 안정화하고 `thumb_done` 또는 `analysis_done`으로 만들면 Phase 2 대상이 된다.
+- Phase 2는 매 사이클마다 아래 항목만 처리한다.
+  - `search_documents`가 없는 media
+  - `SearchDocument.version`이 현재 `semantic_search_version`과 다른 media
+  - `SearchDocument.source_updated_at < MediaFile.updated_at`인 media
+- `ProcessingPipeline.run_semantic_maintenance()`는 non-blocking lock을 사용해 중복 사이클 실행을 막는다.
+- 수동 검증용 endpoint는 `POST /scan/semantic-maintenance`다.
+
+## Query Planning Contract
+
+- `QueryPlanner`는 deterministic rule-based planner로 시작한다.
+- output은 검색 응답 `meta.query_plan`에 남긴다.
+- 현재 분류 필드:
+  - `keyword_query`
+  - `visual_queries`
+  - `date_from`, `date_to`
+  - `person_terms`
+  - `place_terms`
+  - `ocr_terms`
+  - `visual_terms`
+  - `intent`
+- 이미지 검색 품질은 planner가 어떤 channel을 강하게 호출할지 결정하는 데서 나온다. 모델 기반 planner는 이후 optional provider로 붙인다.
 
 ## Pipeline States
 
@@ -62,9 +93,11 @@ Stage 1 (현재):
 
 `discovered -> waiting_stable -> queued -> metadata_done -> thumb_done -> preview_done -> analysis_done`
 
-Stage 2 (T17 이후 확장):
+Stage 2:
 
-`analysis_done -> embedding_done` (이미지 한정, VLM 캡션/OCR은 병행 상태로 취급)
+`thumb_done|analysis_done -> semantic indexed`
+
+Semantic indexed는 별도 media status가 아니라 `search_documents` 및 관련 semantic output row의 존재와 version으로 판단한다.
 
 Terminal or divergent states:
 
@@ -82,10 +115,17 @@ Terminal or divergent states:
   - `embeddings/faces/v1/ab/<file_id>-face-<idx>.json`
   - `embeddings/people/v1/person-<id>.json`
   - `embeddings/clip/<model_version>/ab/<file_id>.npy` (T17 이후)
+- SQLite semantic tables:
+  - `media_ocr`
+  - `media_analysis_signals`
+  - `media_embeddings`
+  - `media_auto_tag_states`
+  - `search_documents`
+  - `search_documents_fts` (SQLite FTS5 virtual table)
 
 ## External Dependencies (Stage 2)
 
 - 역지오코딩: Nominatim 셀프호스트 또는 Kakao 로컬 API 중 택1, 환경변수 스위치
 - 임베딩 모델: SigLIP2 또는 OpenCLIP, HuggingFace weight 오프라인 캐시
 - LLM 쿼리 파서: 로컬 Ollama(Qwen 2.5) 또는 외부 API, JSON 스키마 강제
-- 벡터 인덱스: 초기 in-memory NumPy, 확장 시 LanceDB 또는 Qdrant
+- 벡터 인덱스: `VectorIndexBackend` 기준. 현재 local NumPy exact search, 확장 시 FAISS/LanceDB/Qdrant adapter

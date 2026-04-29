@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, time
 from typing import Protocol
 
-from app.services.search import query_translate
+from app.services.search.planner import QueryPlan, plan_query
 
 
 RRF_K = 60.0
@@ -69,35 +69,36 @@ class HybridSearchService:
         date_from: object | None = None,
         date_to: object | None = None,
         mode: str = "hybrid",
+        debug: bool = False,
     ) -> tuple[list[dict], dict]:
         if not query.strip():
             return [], {"effective_mode": mode, "intent_reason": "empty"}
 
-        cleaned = query_translate.normalize_query(query)
+        plan = plan_query(query)
+        cleaned = plan.normalized_query
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
 
         # Auto-extract date range from natural language when caller didn't specify one
-        if date_from is None and date_to is None:
-            auto_date_from, auto_date_to = query_translate.extract_date_range(cleaned)
-            if auto_date_from is not None:
-                date_from = datetime.combine(auto_date_from, time.min)
-                date_to = datetime.combine(auto_date_to, time.max) if auto_date_to else None
+        if date_from is None and date_to is None and plan.date_from is not None:
+            date_from = datetime.combine(plan.date_from, time.min)
+            date_to = datetime.combine(plan.date_to, time.max) if plan.date_to else None
 
-        ocr_results = self._backend.search_by_ocr(cleaned, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
+        keyword_query = plan.keyword_query or cleaned
+        ocr_results = self._backend.search_by_ocr(keyword_query, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
         effective_mode, intent_reason = resolve_effective_mode(cleaned, normalized_mode, ocr_results)
 
         shadow_results = (
-            self._backend.search_by_shadow_doc(cleaned, limit=limit)
+            self._backend.search_by_shadow_doc(keyword_query, limit=limit)
             if effective_mode in {"hybrid", "ocr", "semantic"}
             else []
         )
         clip_results = (
-            self._search_clip_variants(cleaned, limit, place_filter, date_from, date_to)
+            self._search_clip_variants(plan, limit, place_filter, date_from, date_to)
             if effective_mode in {"hybrid", "semantic"}
             else []
         )
         if effective_mode == "semantic" and not clip_results:
-            shadow_results = self._backend.search_by_shadow_doc(cleaned, limit=limit)
+            shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
 
         merged = fuse_ranked_results(
             effective_mode,
@@ -106,12 +107,26 @@ class HybridSearchService:
             clip_results,
             shadow_results,
         )
+        debug_candidates = [dict(item) for item in merged] if debug else None
         apply_exact_ocr_boost(cleaned, merged)
         apply_exact_tag_boost(merged)
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
-        meta: dict = {"effective_mode": effective_mode, "intent_reason": intent_reason}
+        meta: dict = {"effective_mode": effective_mode, "intent_reason": intent_reason, "query_plan": plan.to_meta()}
+        if debug:
+            weights = intent_weights(effective_mode, intent_reason)
+            meta["debug"] = {
+                "requested_mode": normalized_mode,
+                "weights": weights,
+                "channels": {
+                    "ocr": _preview_results(ocr_results),
+                    "clip": _preview_results(clip_results),
+                    "shadow": _preview_results(shadow_results),
+                },
+                "fused": _preview_results(debug_candidates or merged),
+                "final": _preview_results(final),
+            }
         if not final and hasattr(self._backend, "suggest_related_tags"):
             suggestions = self._backend.suggest_related_tags(cleaned, limit=8)
             if suggestions:
@@ -120,14 +135,14 @@ class HybridSearchService:
 
     def _search_clip_variants(
         self,
-        query: str,
+        plan: QueryPlan,
         limit: int,
         place_filter: str | None,
         date_from: object | None,
         date_to: object | None,
     ) -> list[dict]:
         merged: dict[str, dict] = {}
-        for variant in query_translate.expand_for_clip(query):
+        for variant in plan.visual_queries:
             query_bytes = self._backend.encode_text(variant)
             results = self._backend.search_by_embedding(
                 query_bytes,
@@ -169,6 +184,7 @@ def fuse_ranked_results(
         existing["effective_mode"] = effective_mode
         existing[f"{channel}_rank"] = rank
         existing[f"rrf_{channel}"] = weights[channel] / (RRF_K + rank)
+        existing.setdefault("score_breakdown", [])
         channel_hits.setdefault(file_id, set()).add(channel)
 
     for rank, result in enumerate(ocr_results, start=1):
@@ -187,6 +203,15 @@ def fuse_ranked_results(
             + float(result.get("rrf_clip") or 0.0)
             + float(result.get("rrf_shadow") or 0.0)
         )
+        result["score_breakdown"] = [
+            {
+                "stage": "rrf",
+                "rrf_ocr": float(result.get("rrf_ocr") or 0.0),
+                "rrf_clip": float(result.get("rrf_clip") or 0.0),
+                "rrf_shadow": float(result.get("rrf_shadow") or 0.0),
+                "rrf_total": float(result.get("rrf_score") or 0.0),
+            }
+        ]
         fused.append(result)
 
     if not fused:
@@ -195,6 +220,13 @@ def fuse_ranked_results(
     max_score = max(float(item.get("rrf_score") or 0.0) for item in fused) or 1.0
     for result in fused:
         result["rank_score"] = max(0.0, min(1.0, float(result.get("rrf_score") or 0.0) / max_score))
+        result.setdefault("score_breakdown", []).append(
+            {
+                "stage": "normalize",
+                "rank_score": float(result.get("rank_score") or 0.0),
+                "max_rrf_score": max_score,
+            }
+        )
     return fused
 
 
@@ -268,23 +300,42 @@ def apply_exact_ocr_boost(query: str, results: list[dict]) -> None:
             # Still apply ngram score bonus when OCR text is absent
             ngram = float(result.get("ngram_score") or 0.0)
             if ngram > 0:
-                result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + ngram * 0.10)
+                bonus = ngram * 0.10
+                result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
+                result.setdefault("score_breakdown", []).append(
+                    {"stage": "ocr_ngram_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
+                )
             continue
         ocr_lower = ocr_text.casefold()
         ngram_bonus = float(result.get("ngram_score") or 0.0) * 0.08
         if lowered in ocr_lower:
-            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.22 + ngram_bonus)
+            bonus = 0.22 + ngram_bonus
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
             result["ocr_exact_match"] = True
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "ocr_exact_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
+            )
         elif tokens and all(token in ocr_lower for token in tokens):
-            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.12 + ngram_bonus)
+            bonus = 0.12 + ngram_bonus
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "ocr_token_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
+            )
         elif ngram_bonus > 0:
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + ngram_bonus)
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "ocr_ngram_bonus", "delta": ngram_bonus, "rank_score": float(result.get("rank_score") or 0.0)}
+            )
 
 
 def apply_exact_tag_boost(results: list[dict]) -> None:
     for result in results:
         if result.get("tag_exact_match"):
-            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.9)
+            bonus = 0.9
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "tag_exact_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
+            )
 
 
 def search_sort_key(item: dict) -> tuple[bool, bool, float]:
@@ -311,3 +362,29 @@ def set_match_explanations(results: list[dict]) -> None:
             result["match_explanation"] = "OCR text match"
         else:
             result["match_explanation"] = result.get("match_reason", "match")
+
+
+def _preview_results(results: list[dict], *, limit: int = 8) -> list[dict]:
+    preview: list[dict] = []
+    for item in results[:limit]:
+        preview.append(
+            {
+                "file_id": item.get("file_id"),
+                "filename": item.get("filename"),
+                "match_reason": item.get("match_reason"),
+                "match_explanation": item.get("match_explanation"),
+                "ocr_match_kind": item.get("ocr_match_kind"),
+                "matched_tag": item.get("matched_tag"),
+                "semantic_query": item.get("semantic_query"),
+                "distance": item.get("distance"),
+                "tag_exact_match": item.get("tag_exact_match"),
+                "ocr_exact_match": item.get("ocr_exact_match"),
+                "rrf_score": item.get("rrf_score"),
+                "rank_score": item.get("rank_score"),
+                "rrf_ocr": item.get("rrf_ocr"),
+                "rrf_clip": item.get("rrf_clip"),
+                "rrf_shadow": item.get("rrf_shadow"),
+                "score_breakdown": item.get("score_breakdown"),
+            }
+        )
+    return preview

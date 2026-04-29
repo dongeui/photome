@@ -8,7 +8,15 @@ from app.models.media import MediaFile
 from app.models.job import ProcessingJob
 from app.models.observation import ScanObservation
 from app.models.person import Person
-from app.models.semantic import MediaAnalysisSignal, MediaAutoTagState, MediaEmbedding, MediaOCR, MediaOCRBlock, MediaOCRGram
+from app.models.semantic import (
+    MediaAnalysisSignal,
+    MediaAutoTagState,
+    MediaEmbedding,
+    MediaOCR,
+    MediaOCRBlock,
+    MediaOCRGram,
+    SearchDocument,
+)
 from app.models.tag import Tag
 
 __all__ = [
@@ -26,5 +34,6 @@ __all__ = [
     "Person",
     "ProcessingJob",
     "ScanObservation",
+    "SearchDocument",
     "Tag",
 ]

@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.face import Face
 from app.models.annotation import MediaAnnotation
 from app.models.media import MediaFile
-from app.models.semantic import MediaAnalysisSignal, MediaEmbedding, MediaOCR, MediaOCRGram
+from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
+from app.services.search.vector import LocalNumpyVectorIndex, VectorIndexBackend
 
 FACE_HINTS = {
     "face", "faces", "person", "people", "portrait", "selfie",
@@ -67,9 +67,16 @@ TAG_SYNONYMS: dict[str, set[str]] = {
 
 
 class SqlAlchemyHybridSearchBackend:
-    def __init__(self, session: Session, *, embeddings_root: Path) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        embeddings_root: Path,
+        vector_index: VectorIndexBackend | None = None,
+    ) -> None:
         self._session = session
         self._embeddings_root = embeddings_root
+        self._vector_index = vector_index or LocalNumpyVectorIndex(session, embeddings_root=embeddings_root)
 
     def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
         pattern = _like_pattern(query)
@@ -148,6 +155,10 @@ class SqlAlchemyHybridSearchBackend:
         if tagged:
             return tagged
 
+        results = self._search_by_normalized_document(query, limit=limit)
+        if results:
+            return results[:limit]
+
         pattern = _like_pattern(query)
         statement = (
             select(MediaFile)
@@ -176,6 +187,90 @@ class SqlAlchemyHybridSearchBackend:
             analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
             results.append(self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow"))
         return results[:limit]
+
+    def _search_by_normalized_document(self, query: str, *, limit: int) -> list[dict]:
+        fts_results = self._search_by_fts_document(query, limit=limit)
+        if fts_results:
+            return fts_results
+
+        pattern = _like_pattern(query)
+        statement = (
+            select(MediaFile, SearchDocument)
+            .join(SearchDocument, SearchDocument.file_id == MediaFile.file_id)
+            .where(MediaFile.status != "missing")
+            .where(
+                or_(
+                    func.lower(SearchDocument.search_text).like(pattern),
+                    func.lower(SearchDocument.keyword_text).like(pattern),
+                    func.lower(SearchDocument.semantic_text).like(pattern),
+                )
+            )
+            .order_by(MediaFile.exif_datetime.desc().nullslast(), MediaFile.updated_at.desc())
+            .limit(max(1, limit * 4))
+        )
+        results = []
+        for media_file, document in self._session.execute(statement):
+            ocr = self._session.get(MediaOCR, media_file.file_id)
+            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
+            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow")
+            result["search_document_version"] = document.version
+            results.append(result)
+        return results[:limit]
+
+    def _search_by_fts_document(self, query: str, *, limit: int) -> list[dict]:
+        if self._session.bind is None or self._session.bind.dialect.name != "sqlite":
+            return []
+        fts_query = _fts_query(query)
+        if not fts_query:
+            return []
+        try:
+            rows = self._session.execute(
+                text(
+                    """
+                    SELECT file_id, bm25(search_documents_fts) AS score
+                    FROM search_documents_fts
+                    WHERE search_documents_fts MATCH :query
+                    ORDER BY score ASC
+                    LIMIT :limit
+                    """
+                ),
+                {"query": fts_query, "limit": max(1, limit * 4)},
+            ).all()
+        except Exception:
+            return []
+
+        scored_ids: dict[str, float] = {}
+        for file_id, score in rows:
+            scored_ids.setdefault(str(file_id), float(score or 0.0))
+        if not scored_ids:
+            return []
+
+        statement = select(MediaFile, SearchDocument).join(
+            SearchDocument,
+            SearchDocument.file_id == MediaFile.file_id,
+        ).where(
+            MediaFile.file_id.in_(list(scored_ids)),
+            MediaFile.status != "missing",
+        )
+        by_id: dict[str, tuple[MediaFile, SearchDocument]] = {
+            media_file.file_id: (media_file, document)
+            for media_file, document in self._session.execute(statement)
+        }
+        results = []
+        for file_id, score in sorted(scored_ids.items(), key=lambda item: item[1]):
+            row = by_id.get(file_id)
+            if row is None:
+                continue
+            media_file, document = row
+            ocr = self._session.get(MediaOCR, media_file.file_id)
+            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
+            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow")
+            result["search_document_version"] = document.version
+            result["fts_score"] = score
+            results.append(result)
+            if len(results) >= limit:
+                break
+        return results
 
     def _tagged_shadow_results(self, query: str, *, limit: int) -> list[dict]:
         lowered = query.casefold().strip()
@@ -267,43 +362,21 @@ class SqlAlchemyHybridSearchBackend:
         date_from: Any | None = None,
         date_to: Any | None = None,
     ) -> list[dict]:
-        try:
-            import numpy as np
-
-            query_vector = clip_embedding.embedding_from_bytes(query_embedding)
-            query_norm = float(np.linalg.norm(query_vector)) or 1.0
-        except Exception:
-            return []
-
-        statement = (
-            select(MediaEmbedding, MediaFile)
-            .join(MediaFile, MediaFile.file_id == MediaEmbedding.file_id)
-            .where(MediaFile.status != "missing")
-        )
-        if place_filter:
-            statement = statement.join(Tag, Tag.file_id == MediaFile.file_id).where(Tag.tag_value == place_filter)
-        if isinstance(date_from, datetime):
-            statement = statement.where(MediaFile.exif_datetime >= date_from)
-        if isinstance(date_to, datetime):
-            statement = statement.where(MediaFile.exif_datetime <= date_to)
-
-        scored: list[tuple[float, MediaFile]] = []
-        for embedding, media_file in self._session.execute(statement):
-            vector = self._load_embedding_vector(embedding.embedding_ref)
-            if vector is None or vector.size != query_vector.size:
-                continue
-            denominator = (float(np.linalg.norm(vector)) or 1.0) * query_norm
-            similarity = float(np.dot(query_vector, vector) / denominator)
-            distance = 1.0 - similarity
-            scored.append((distance, media_file))
-
-        scored.sort(key=lambda item: item[0])
         results = []
-        for distance, media_file in scored[:limit]:
+        for hit in self._vector_index.search(
+            query_embedding,
+            limit=limit,
+            place_filter=place_filter,
+            date_from=date_from,
+            date_to=date_to,
+        ):
+            media_file = hit.media_file
             ocr = self._session.get(MediaOCR, media_file.file_id)
             analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
             result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="clip")
-            result["distance"] = distance
+            result["distance"] = hit.distance
+            result["embedding_model"] = hit.model_name
+            result["embedding_version"] = hit.version
             results.append(result)
         return results
 
@@ -343,18 +416,6 @@ class SqlAlchemyHybridSearchBackend:
             .limit(limit)
         )
         return [value for value, _ in self._session.execute(statement)]
-
-    def _load_embedding_vector(self, embedding_ref: str):
-        try:
-            import numpy as np
-
-            path = Path(embedding_ref)
-            absolute_path = path if path.is_absolute() else self._embeddings_root / path.relative_to("embeddings")
-            if not absolute_path.is_file():
-                return None
-            return np.load(absolute_path).astype("float32")
-        except Exception:
-            return None
 
     def _result_dict(
         self,
@@ -409,6 +470,14 @@ class SqlAlchemyHybridSearchBackend:
 
 def _like_pattern(query: str) -> str:
     return f"%{query.casefold().strip()}%"
+
+
+def _fts_query(query: str) -> str:
+    tokens = re.findall(r"[0-9A-Za-z가-힣_]+", query.casefold())
+    if not tokens:
+        return ""
+    deduped = list(dict.fromkeys(token for token in tokens if token))
+    return " OR ".join(f'"{token}"' for token in deduped)
 
 
 def _ocr_match_kind(query: str, text: str) -> str | None:

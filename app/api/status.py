@@ -12,7 +12,9 @@ from app.api.deps import require_state
 from app.api.serializers import serialize_scheduler_snapshot
 from app.services.processing.registry import MediaCatalog
 from app.models.job import ProcessingJob
+from app.models.semantic import SearchDocument
 from sqlalchemy import select
+from sqlalchemy import func
 
 
 router = APIRouter(tags=["status"])
@@ -27,6 +29,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     jobs = payload["jobs"]
     health = payload["health"]
     source_roots = payload["storage"]["source_roots"]
+    source_roots_text = escape("\n".join(source_roots))
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -189,6 +192,109 @@ async def dashboard(request: Request) -> HTMLResponse:
       background: rgba(19,32,42,0.04);
       font-size: .92rem;
     }}
+    .scan-form {{
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }}
+    .scan-form label {{
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: .86rem;
+      font-weight: 700;
+    }}
+    .scan-form textarea {{
+      min-height: 86px;
+      resize: vertical;
+      padding: 11px 12px;
+      border: 1px solid rgba(19,32,42,0.14);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.9);
+      color: var(--text);
+      font: .86rem "SFMono-Regular", "Menlo", monospace;
+      line-height: 1.45;
+    }}
+    .scan-actions {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
+    .scan-actions label {{
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--text);
+      font-size: .9rem;
+      font-weight: 600;
+    }}
+    .scan-actions button {{
+      min-height: 40px;
+      padding: 9px 14px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    .scan-result {{
+      display: none;
+      margin: 0;
+      padding: 10px 12px;
+      overflow: auto;
+      border-radius: 14px;
+      background: rgba(19,32,42,0.05);
+      color: var(--text);
+      font: .8rem "SFMono-Regular", "Menlo", monospace;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }}
+    .scan-result.visible {{ display: block; }}
+    .debug-form {{
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+    }}
+    .debug-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(140px, .55fr)) auto;
+      gap: 8px;
+    }}
+    .debug-grid input, .debug-grid select {{
+      min-height: 40px;
+      padding: 9px 12px;
+      border: 1px solid rgba(19,32,42,0.14);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.9);
+      color: var(--text);
+      font: .9rem "Inter", "Helvetica Neue", sans-serif;
+    }}
+    .debug-grid button {{
+      min-height: 40px;
+      padding: 9px 14px;
+      border: 0;
+      border-radius: 999px;
+      background: #174f49;
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    .debug-result {{
+      margin: 0;
+      padding: 10px 12px;
+      min-height: 260px;
+      overflow: auto;
+      border-radius: 14px;
+      background: rgba(19,32,42,0.05);
+      color: var(--text);
+      font: .8rem "SFMono-Regular", "Menlo", monospace;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }}
     code {{
       font-family: "SFMono-Regular", "Menlo", monospace;
       font-size: .84rem;
@@ -197,9 +303,11 @@ async def dashboard(request: Request) -> HTMLResponse:
       .hero {{ grid-template-columns: 1fr; }}
       .card {{ grid-column: 1 / -1; }}
       .metric-grid {{ grid-template-columns: 1fr 1fr; }}
+      .debug-grid {{ grid-template-columns: 1fr 1fr; }}
     }}
     @media (max-width: 560px) {{
       .metric-grid {{ grid-template-columns: 1fr; }}
+      .debug-grid {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -246,6 +354,17 @@ async def dashboard(request: Request) -> HTMLResponse:
           <div class="row"><span>Last full scan</span><span>{escape(str(scheduler['last_full_scan_at']))}</span></div>
           <div class="row"><span>Next full scan</span><span>{escape(str(scheduler['next_full_scan_at']))}</span></div>
         </div>
+        <form class="scan-form" id="phase1-scan-form">
+          <label>
+            Source roots
+            <textarea id="phase1-source-roots" name="source_roots" spellcheck="false">{source_roots_text}</textarea>
+          </label>
+          <div class="scan-actions">
+            <button type="submit">Run Phase 1 Scan</button>
+            <label><input type="checkbox" id="phase1-full-scan" name="full_scan"> Full scan</label>
+          </div>
+          <pre class="scan-result" id="phase1-scan-result" aria-live="polite"></pre>
+        </form>
       </article>
 
       <article class="card">
@@ -287,8 +406,81 @@ async def dashboard(request: Request) -> HTMLResponse:
           <div class="row"><span>Recent jobs tracked</span><span>{len(jobs['recent'])}</span></div>
         </div>
       </article>
+
+      <article class="card full">
+        <h2>Search Tuning</h2>
+        <p class="sub">Inspect query planning, channel candidates, weights, and fused ranking without leaving the dashboard.</p>
+        <form class="debug-form" id="search-debug-form">
+          <div class="debug-grid">
+            <input id="search-debug-query" name="q" placeholder="Search query" value="작년 여름 바다에서 가족이랑 찍은 사진">
+            <select id="search-debug-mode" name="mode">
+              <option value="hybrid" selected>hybrid</option>
+              <option value="ocr">ocr</option>
+              <option value="semantic">semantic</option>
+            </select>
+            <input id="search-debug-place" name="place" placeholder="Place filter">
+            <button type="submit">Inspect Search</button>
+          </div>
+          <pre class="debug-result" id="search-debug-result" aria-live="polite"></pre>
+        </form>
+      </article>
     </section>
   </main>
+  <script>
+    const scanForm = document.getElementById("phase1-scan-form");
+    const scanResult = document.getElementById("phase1-scan-result");
+    scanForm?.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      scanResult.classList.add("visible");
+      scanResult.textContent = "Running scan...";
+      const sourceRoots = document.getElementById("phase1-source-roots").value;
+      const fullScan = document.getElementById("phase1-full-scan").checked;
+      const params = new URLSearchParams();
+      if (sourceRoots.trim()) params.set("source_roots", sourceRoots);
+      if (fullScan) params.set("full_scan", "true");
+      try {{
+        const response = await fetch(`/scan?${{params.toString()}}`, {{ method: "POST" }});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        const summary = payload.job?.result?.summary || {{}};
+        const processed = payload.job?.result?.processed || {{}};
+        scanResult.textContent = [
+          `status: ${{payload.job?.status}}`,
+          `scanned: ${{summary.scanned ?? 0}}`,
+          `created: ${{summary.created ?? 0}}`,
+          `updated: ${{summary.updated ?? 0}}`,
+          `moved: ${{summary.moved ?? 0}}`,
+          `missing: ${{summary.missing ?? 0}}`,
+          `failed: ${{summary.failed ?? 0}}`,
+          `processed: ${{processed.succeeded ?? 0}} succeeded, ${{processed.failed ?? 0}} failed`,
+        ].join("\\n");
+      }} catch (error) {{
+        scanResult.textContent = `error: ${{error.message}}`;
+      }}
+    }});
+
+    const searchDebugForm = document.getElementById("search-debug-form");
+    const searchDebugResult = document.getElementById("search-debug-result");
+    searchDebugForm?.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      searchDebugResult.textContent = "Inspecting search...";
+      const params = new URLSearchParams();
+      const query = document.getElementById("search-debug-query").value;
+      const mode = document.getElementById("search-debug-mode").value;
+      const place = document.getElementById("search-debug-place").value;
+      if (query.trim()) params.set("q", query);
+      if (mode) params.set("mode", mode);
+      if (place.trim()) params.set("place", place);
+      try {{
+        const response = await fetch(`/search/debug?${{params.toString()}}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        searchDebugResult.textContent = JSON.stringify(payload.meta, null, 2);
+      }} catch (error) {{
+        searchDebugResult.textContent = `error: ${{error.message}}`;
+      }}
+    }});
+  </script>
 </body>
 </html>"""
     return HTMLResponse(html)
@@ -356,6 +548,10 @@ async def status(request: Request) -> dict[str, Any]:
                 "runtime": {
                     "face_analysis_enabled": settings.face_analysis_enabled,
                     "place_tag_precision": settings.place_tag_precision,
+                },
+                "search_documents": {
+                    "total": int(session.scalar(select(func.count()).select_from(SearchDocument)) or 0),
+                    "version": settings.semantic_search_version,
                 },
             },
             "health": {

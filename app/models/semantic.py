@@ -88,3 +88,22 @@ class MediaAutoTagState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     media_file = relationship("MediaFile")
+
+
+class SearchDocument(Base):
+    __tablename__ = "search_documents"
+
+    file_id: Mapped[str] = mapped_column(ForeignKey("media_files.file_id", ondelete="CASCADE"), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    search_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    keyword_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    semantic_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags_json: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    people_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    places_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    signals_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    embedding_refs_json: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    media_file = relationship("MediaFile")

@@ -17,6 +17,7 @@ from app.models.asset import DerivedAsset
 from app.models.annotation import MediaAnnotation
 from app.models.tag import Tag
 from app.services.processing.registry import MediaCatalog
+from app.services.semantic import SemanticCatalog
 
 
 router = APIRouter(prefix="/media", tags=["media"])
@@ -166,6 +167,11 @@ async def update_media_annotation(request: Request, file_id: str):
         session.execute(delete(Tag).where(Tag.file_id == file_id, Tag.tag_type == "custom"))
         for tag_value in custom_tags:
             session.add(Tag(file_id=file_id, tag_type="custom", tag_value=tag_value))
+        media_file.updated_at = datetime.utcnow()
+        SemanticCatalog(session).upsert_search_document(
+            media_file,
+            version=request.app.state.settings.semantic_search_version,
+        )
         session.commit()
 
     return RedirectResponse(next_url, status_code=303)
