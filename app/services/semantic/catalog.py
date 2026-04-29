@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict
 from datetime import datetime
+import hashlib
 import re
 from typing import Iterable
 
@@ -213,13 +214,20 @@ class SemanticCatalog:
             *(embedding.updated_at for embedding in embeddings),
         )
 
+        keyword_text = _join_text(keyword_parts)
+        semantic_text = _join_text(semantic_parts)
+        # Content hash: detects when text content is identical so FTS writes can be skipped
+        content_hash = hashlib.md5(
+            (search_text + keyword_text + semantic_text).encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
+
         row = self._session.get(SearchDocument, media_file.file_id)
         values = {
             "version": version,
             "source_updated_at": source_updated_at,
             "search_text": search_text,
-            "keyword_text": _join_text(keyword_parts),
-            "semantic_text": _join_text(semantic_parts),
+            "keyword_text": keyword_text,
+            "semantic_text": semantic_text,
             "tags_json": tag_payload,
             "people_json": people,
             "places_json": places,
@@ -229,11 +237,20 @@ class SemanticCatalog:
         if row is None:
             row = SearchDocument(file_id=media_file.file_id, **values)
             self._session.add(row)
+            self._session.flush()
+            self._upsert_search_document_fts(row)
         else:
+            # Skip FTS rewrite when content is identical — avoids churn on metadata-only updates
+            content_unchanged = (
+                row.search_text == search_text
+                and row.keyword_text == keyword_text
+                and row.semantic_text == semantic_text
+            )
             for key, value in values.items():
                 setattr(row, key, value)
-        self._session.flush()
-        self._upsert_search_document_fts(row)
+            self._session.flush()
+            if not content_unchanged:
+                self._upsert_search_document_fts(row)
         return row
 
     def list_media_needing_search_document(self, *, version: str, limit: int = 100) -> list[MediaFile]:

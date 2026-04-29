@@ -162,6 +162,15 @@ class FaissVectorIndex:
             self._id_map = []
             self._meta_map = {}
 
+    def update_session(self, session: Session) -> None:
+        """Thread-safely replace the SQLAlchemy session reference.
+
+        Must be called under the lock to avoid a data race with _build_index()
+        reading self._session on the first search after the index was invalidated.
+        """
+        with self._lock:
+            self._session = session
+
     def search(
         self,
         query_embedding: bytes,
@@ -317,8 +326,8 @@ def build_vector_index(session: Session, *, embeddings_root: Path, backend: str 
         if _global_faiss_index is None:
             _global_faiss_index = FaissVectorIndex(session, embeddings_root=embeddings_root)
         else:
-            # Update session reference for the new request context
-            _global_faiss_index._session = session
+            # Update session reference thread-safely (avoids race with _build_index)
+            _global_faiss_index.update_session(session)
         return _global_faiss_index
     except ImportError:
         if backend == "faiss":

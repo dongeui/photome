@@ -1,5 +1,5 @@
 # Status Snapshot
-updated 2026-04-29
+updated 2026-04-29 (검색 강화 Round 1~3 완료)
 
 이 문서는 아래 4가지만 남긴다.
 
@@ -36,10 +36,29 @@ updated 2026-04-29
 - GitHub PR stage는 `agent:dev -> agent:qa -> agent:planner-review -> agent:ready-to-merge` 순서다.
 - GitHub live 자동 루프는 아직 미연결 상태다. 원인은 webhook secret/label/branch protection 미설정이다.
 
+### 검색 강화 (Phase 2 Round 1~3) — 완료
+
+- **DB-driven 태그 어휘** (`TagVocabularyCache`): 5분 TTL로 DB Tag 테이블을 읽어 플래너에 주입. 하드코딩 PLACE_TERMS 의존 제거.
+- **KoNLPy 형태소 분석** (`tokenizer.py`): `korean_nouns()` — konlpy 설치 시 Okt/Mecab, 미설치 시 heuristic fallback. `PHOTOME_TOKENIZER` 환경변수로 제어.
+- **복합 토큰 분해** (`_split_compound_token`): "제주도갔던사진" → ["제주도", "사진"] 형식 heuristic 분해.
+- **멀티채널 RRF 보정**: 2채널 매칭 +15%, 3채널 +30% 보너스.
+- **FAISS 스레드 안전**: `update_session()` classmethod로 세션 교체 시 lock 보호.
+- **N+1 제거** (`_batch_load_supplements`): tags/face_count/OCR/analysis를 파일 목록 단위 배치 로드.
+- **근접 중복 제거** (`remove_near_duplicates`): 3초 내 연속 촬영은 최고 점수 1장만 유지.
+- **날짜 soft scoring**: 쿼리 날짜 범위 내 OCR/shadow 결과에 +0.08 보너스.
+- **zero-result fallback**: 날짜 파싱으로 결과 0건 시 날짜 필터 제거 후 재검색.
+- **FTS 쓰기 최적화**: content hash 비교로 텍스트 미변경 시 FTS 재작성 스킵.
+- **캐시 스레드 안전**: `_cache_lock`으로 query cache 동시 쓰기 보호.
+- **퇴화 쿼리 차단**: 유의미한 글자 없는 쿼리 조기 반환.
+- **CLIP 텍스트 길이 제한**: 200자 초과 시 truncate (77 토큰 한도 대응).
+- **FTS 누락 경고**: 프로세스당 1회 WARNING 로그 (DB 마이그레이션 미실행 감지용).
+- **구조적 검색 로그**: `logger.debug`로 쿼리·채널별 결과 수 기록.
+- **TagVocabularyCache.invalidate() classmethod**: 세션 인스턴스 없이 호출 가능하도록 수정.
+
 ## 현재 작업
 
 - active branch는 `main`이다.
-- 현재 포커스는 Phase 2 검색 기반 강화다.
+- 검색 강화 라운드 1~3 완료. 다음은 커밋 + 남은 작업 정리.
 - 로컬 서버는 `http://127.0.0.1:8000/gallery`와 `http://127.0.0.1:8000/dashboard`에서 확인 가능하다.
 - 서버 실행 설정은 Phase 1 polling off, Phase 2 semantic scheduler on, CLIP off, face analysis off다.
 

@@ -7,13 +7,17 @@ propagated to the embedding backend as date filters.
 
 from __future__ import annotations
 
+import logging
+import re
+import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Protocol
 
 from app.services.search.planner import QueryPlan, plan_query
 
+logger = logging.getLogger(__name__)
 
 RRF_K = 60.0
 
@@ -22,6 +26,7 @@ RRF_K = 60.0
 # ---------------------------------------------------------------------------
 _CACHE_TTL_SECONDS = 60
 _query_cache: dict[str, tuple[float, list[dict], dict]] = {}  # key → (ts, results, meta)
+_cache_lock = threading.Lock()  # protects _query_cache against concurrent writers
 
 
 def _cache_key(query: str, limit: int, mode: str, place_filter: str | None) -> str:
@@ -29,22 +34,24 @@ def _cache_key(query: str, limit: int, mode: str, place_filter: str | None) -> s
 
 
 def _cache_get(key: str) -> tuple[list[dict], dict] | None:
-    entry = _query_cache.get(key)
-    if entry is None:
-        return None
-    ts, results, meta = entry
-    if _time.monotonic() - ts > _CACHE_TTL_SECONDS:
-        del _query_cache[key]
-        return None
-    return results, meta
+    with _cache_lock:
+        entry = _query_cache.get(key)
+        if entry is None:
+            return None
+        ts, results, meta = entry
+        if _time.monotonic() - ts > _CACHE_TTL_SECONDS:
+            del _query_cache[key]
+            return None
+        return results, meta
 
 
 def _cache_set(key: str, results: list[dict], meta: dict) -> None:
-    # Evict oldest entries when cache grows beyond 256 keys
-    if len(_query_cache) >= 256:
-        oldest_key = min(_query_cache, key=lambda k: _query_cache[k][0])
-        del _query_cache[oldest_key]
-    _query_cache[key] = (_time.monotonic(), results, meta)
+    with _cache_lock:
+        # Evict oldest entries when cache grows beyond 256 keys
+        if len(_query_cache) >= 256:
+            oldest_key = min(_query_cache, key=lambda k: _query_cache[k][0])
+            del _query_cache[oldest_key]
+        _query_cache[key] = (_time.monotonic(), results, meta)
 
 
 def clear_query_cache() -> int:
@@ -54,8 +61,9 @@ def clear_query_cache() -> int:
     content is visible to subsequent queries without waiting for TTL expiry.
     Returns the number of entries cleared.
     """
-    count = len(_query_cache)
-    _query_cache.clear()
+    with _cache_lock:
+        count = len(_query_cache)
+        _query_cache.clear()
     return count
 
 FACE_HINTS = {
@@ -150,6 +158,9 @@ class HybridSearchService:
     ) -> tuple[list[dict], dict]:
         if not query.strip():
             return [], {"effective_mode": mode, "intent_reason": "empty"}
+        # Guard against degenerate queries (only punctuation / single character)
+        if not re.search(r"[A-Za-z가-힣0-9]{2,}", query):
+            return [], {"effective_mode": mode, "intent_reason": "degenerate"}
 
         # Cache only non-debug requests without caller-provided date filters
         use_cache = (
@@ -248,11 +259,26 @@ class HybridSearchService:
         apply_exact_ocr_boost(cleaned, merged)
         apply_exact_tag_boost(merged)
         apply_context_filter_boost(merged, plan)
+        apply_date_soft_scoring(merged, plan)
         apply_feedback_boost(merged, promoted_ids)
+        merged = remove_near_duplicates(merged)
         merged = self._reranker.rerank(merged, plan)
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
+
+        # Zero-result fallback: loosen date filter and retry once
+        if not final and (plan.date_from is not None) and not debug:
+            loosened = self._loosened_date_fallback(
+                query=query,
+                limit=limit,
+                place_filter=place_filter,
+                mode=mode,
+                weight_overrides=weight_overrides,
+            )
+            if loosened:
+                final = loosened
+                meta["fallback"] = "date_relaxed"
         meta: dict = {
             "effective_mode": effective_mode,
             "intent_reason": intent_reason,
@@ -297,7 +323,39 @@ class HybridSearchService:
         if use_cache:
             _cache_set(cache_key, final, meta)
 
+        logger.debug(
+            "search query=%r mode=%s intent=%s channels=ocr:%d clip:%d shadow:%d final=%d",
+            query, effective_mode, plan.intent,
+            len(ocr_results), len(clip_results), len(shadow_results), len(final),
+        )
         return final, meta
+
+    def _loosened_date_fallback(
+        self,
+        *,
+        query: str,
+        limit: int,
+        place_filter: str | None,
+        mode: str,
+        weight_overrides: dict[str, float] | None,
+    ) -> list[dict]:
+        """Retry the search without date filters when the original returns nothing.
+
+        Passes date_from=None so that semantic/shadow channels are not restricted,
+        letting the user discover relevant photos even if the planner's date
+        extraction was slightly off.
+        """
+        results, _ = self.search_with_meta(
+            query,
+            limit=limit,
+            place_filter=place_filter,
+            date_from=None,
+            date_to=None,
+            mode=mode,
+            debug=False,
+            weight_overrides=weight_overrides,
+        )
+        return results
 
     def _search_clip_variants(
         self,
@@ -322,6 +380,9 @@ class HybridSearchService:
 
         for variant in plan.visual_queries:
             query_bytes = self._backend.encode_text(variant)
+            if not query_bytes:
+                # CLIP model not available or encoding failed — skip this variant
+                continue
             for pf in effective_place_filters:
                 results = self._backend.search_by_embedding(
                     query_bytes,
@@ -379,17 +440,28 @@ def fuse_ranked_results(
     for file_id, result in candidates.items():
         hits = channel_hits.get(file_id, set())
         result["match_reason"] = combined_match_reason(hits)
-        result["rrf_score"] = (
+        rrf_base = (
             float(result.get("rrf_ocr") or 0.0)
             + float(result.get("rrf_clip") or 0.0)
             + float(result.get("rrf_shadow") or 0.0)
         )
+        # Multi-channel agreement bonus: more channels = higher confidence
+        n_channels = len(hits)
+        if n_channels >= 3:
+            channel_multiplier = 1.30
+        elif n_channels == 2:
+            channel_multiplier = 1.15
+        else:
+            channel_multiplier = 1.0
+        result["rrf_score"] = rrf_base * channel_multiplier
         result["score_breakdown"] = [
             {
                 "stage": "rrf",
                 "rrf_ocr": float(result.get("rrf_ocr") or 0.0),
                 "rrf_clip": float(result.get("rrf_clip") or 0.0),
                 "rrf_shadow": float(result.get("rrf_shadow") or 0.0),
+                "rrf_base": rrf_base,
+                "channel_multiplier": channel_multiplier,
                 "rrf_total": float(result.get("rrf_score") or 0.0),
             }
         ]
@@ -506,6 +578,44 @@ def combined_match_reason(hits: set[str]) -> str:
     if "shadow" in hits:
         return "shadow"
     return "analysis"
+
+
+def apply_date_soft_scoring(results: list[dict], plan: "QueryPlan") -> None:
+    """Soft-score OCR/shadow results by date proximity when planner extracted a date range.
+
+    CLIP results are already hard-filtered by date in search_by_embedding.
+    OCR and shadow results have no date filter — this function rewards results
+    that fall within the queried date range and gently discounts those outside.
+    """
+    if plan.date_from is None:
+        return
+
+    from datetime import datetime as _dt
+
+    date_from = _dt.combine(plan.date_from, time.min)
+    date_to = _dt.combine(plan.date_to, time.max) if plan.date_to else None
+
+    for result in results:
+        # Skip pure CLIP hits — they're already date-filtered
+        if result.get("match_reason") == "clip":
+            continue
+        captured = result.get("captured_at")
+        if captured is None:
+            continue
+        try:
+            if isinstance(captured, str):
+                captured = _dt.fromisoformat(captured)
+            in_range = captured >= date_from and (date_to is None or captured <= date_to)
+        except Exception:
+            continue
+
+        if in_range:
+            bonus = 0.08
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "date_in_range_bonus", "delta": bonus,
+                 "rank_score": float(result.get("rank_score") or 0.0)}
+            )
 
 
 def apply_context_filter_boost(results: list[dict], plan: "QueryPlan") -> None:
@@ -661,6 +771,67 @@ def set_match_explanations(results: list[dict]) -> None:
                 pass
 
         result["match_explanation"] = " · ".join(parts) if parts else "일치"
+
+
+def remove_near_duplicates(
+    results: list[dict],
+    *,
+    burst_seconds: int = 3,
+) -> list[dict]:
+    """Remove burst duplicates: keep only the highest-scoring photo per burst window.
+
+    Photos captured within `burst_seconds` of each other are treated as a burst.
+    Within each burst, only the top-scored result is kept.  Results without a
+    timestamp are always kept (conservative approach).
+    """
+    from datetime import timezone
+
+    kept: list[dict] = []
+    seen_windows: dict[str, float] = {}  # bucket_key → best rank_score seen
+
+    for result in results:
+        captured = result.get("captured_at")
+        if captured is None:
+            kept.append(result)
+            continue
+
+        # Normalise to UTC timestamp integer, bucketed to burst_seconds
+        try:
+            if isinstance(captured, str):
+                from datetime import datetime as _dt
+                captured = _dt.fromisoformat(captured)
+            ts = int(captured.timestamp())
+        except Exception:
+            kept.append(result)
+            continue
+
+        bucket = ts // burst_seconds
+        score = float(result.get("rank_score") or 0.0)
+        key = str(bucket)
+
+        if key not in seen_windows:
+            seen_windows[key] = score
+            kept.append(result)
+        elif score > seen_windows[key]:
+            # Replace the lower-scored burst member
+            seen_windows[key] = score
+            for i, existing in enumerate(kept):
+                ex_captured = existing.get("captured_at")
+                if ex_captured is None:
+                    continue
+                try:
+                    if isinstance(ex_captured, str):
+                        from datetime import datetime as _dt
+                        ex_captured = _dt.fromisoformat(ex_captured)
+                    ex_ts = int(ex_captured.timestamp())
+                except Exception:
+                    continue
+                if ex_ts // burst_seconds == bucket:
+                    kept[i] = result
+                    break
+        # else: a better result for this burst is already kept — skip
+
+    return kept
 
 
 def _is_coordinate_tag(value: str) -> bool:

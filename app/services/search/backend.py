@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,15 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 import os
+
+logger = logging.getLogger(__name__)
+
+# CLIP model has a 77-token limit; long queries degrade embedding quality.
+# Truncating at ~200 chars keeps the most relevant content within token budget.
+_CLIP_MAX_CHARS = 200
+
+# Warn once per process if FTS tables are missing
+_fts_warning_emitted = False
 
 from app.models.annotation import MediaAnnotation
 from app.models.face import Face
@@ -132,27 +142,18 @@ class SqlAlchemyHybridSearchBackend:
             .order_by(MediaFile.exif_datetime.desc().nullslast(), MediaFile.updated_at.desc())
             .limit(max(1, limit * 4))
         )
-        rows = []
-        seen_ids: set[str] = set()
-        for media_file, ocr, analysis in self._session.execute(main_statement):
-            seen_ids.add(media_file.file_id)
-            rows.append(
-                self._result_dict(
-                    media_file,
-                    ocr=ocr,
-                    analysis=analysis,
-                    match_reason="ocr",
-                    ocr_match_kind=_ocr_match_kind(query, ocr.text_content),
-                )
-            )
+        main_rows = list(self._session.execute(main_statement))
+        seen_ids = {mf.file_id for mf, _, _ in main_rows}
 
         # Supplement with n-gram index results for Korean text when main results are few
+        ngram_rows: list[tuple] = []
+        hit_counts: dict[str, float] = {}
         grams = _korean_2grams(query)
-        if grams and len(rows) < limit:
+        if grams and len(main_rows) < limit:
             gram_hits = self._ngram_scored_ids(grams, exclude=seen_ids, limit=limit * 2)
             if gram_hits:
                 max_hits = max(count for _, count in gram_hits) or 1
-                hit_counts = {fid: count for fid, count in gram_hits}
+                hit_counts = {fid: count / max_hits for fid, count in gram_hits}
                 ngram_statement = (
                     select(MediaFile, MediaOCR, MediaAnalysisSignal)
                     .join(MediaOCR, MediaOCR.file_id == MediaFile.file_id)
@@ -160,17 +161,31 @@ class SqlAlchemyHybridSearchBackend:
                     .where(MediaFile.file_id.in_([fid for fid, _ in gram_hits]))
                     .where(MediaFile.status != "missing")
                 )
-                for media_file, ocr, analysis in self._session.execute(ngram_statement):
-                    row = self._result_dict(
-                        media_file,
-                        ocr=ocr,
-                        analysis=analysis,
-                        match_reason="ocr",
-                        ocr_match_kind="ngram",
-                    )
-                    # Encode gram coverage as a normalised pre-score (used by RRF)
-                    row["ngram_score"] = hit_counts.get(media_file.file_id, 0) / max_hits
-                    rows.append(row)
+                ngram_rows = list(self._session.execute(ngram_statement))
+
+        all_file_ids = [mf.file_id for mf, _, _ in main_rows + ngram_rows]
+        tags_by_file, face_counts, _, _ = self._batch_load_supplements(all_file_ids)
+
+        rows: list[dict] = []
+        for media_file, ocr, analysis in main_rows:
+            fid = media_file.file_id
+            rows.append(self._build_result_dict(
+                media_file, ocr=ocr, analysis=analysis,
+                match_reason="ocr",
+                ocr_match_kind=_ocr_match_kind(query, ocr.text_content),
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts.get(fid, 0),
+            ))
+        for media_file, ocr, analysis in ngram_rows:
+            fid = media_file.file_id
+            row = self._build_result_dict(
+                media_file, ocr=ocr, analysis=analysis,
+                match_reason="ocr", ocr_match_kind="ngram",
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts.get(fid, 0),
+            )
+            row["ngram_score"] = hit_counts.get(fid, 0.0)
+            rows.append(row)
 
         return rows[:limit]
 
@@ -224,11 +239,20 @@ class SqlAlchemyHybridSearchBackend:
             .order_by(MediaFile.exif_datetime.desc().nullslast(), MediaFile.updated_at.desc())
             .limit(max(1, limit * 4))
         )
+        fallback_files = list(self._session.scalars(statement))
+        file_ids = [mf.file_id for mf in fallback_files]
+        tags_by_file, face_counts, ocr_by_file, analysis_by_file = self._batch_load_supplements(file_ids)
         results = []
-        for media_file in self._session.scalars(statement):
-            ocr = self._session.get(MediaOCR, media_file.file_id)
-            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
-            results.append(self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow"))
+        for media_file in fallback_files:
+            fid = media_file.file_id
+            results.append(self._build_result_dict(
+                media_file,
+                ocr=ocr_by_file.get(fid),
+                analysis=analysis_by_file.get(fid),
+                match_reason="shadow",
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts.get(fid, 0),
+            ))
         return results[:limit]
 
     def _search_by_normalized_document(self, query: str, *, limit: int) -> list[dict]:
@@ -251,11 +275,20 @@ class SqlAlchemyHybridSearchBackend:
             .order_by(MediaFile.exif_datetime.desc().nullslast(), MediaFile.updated_at.desc())
             .limit(max(1, limit * 4))
         )
+        doc_rows = list(self._session.execute(statement))
+        file_ids = [mf.file_id for mf, _ in doc_rows]
+        tags_by_file, face_counts, ocr_by_file, analysis_by_file = self._batch_load_supplements(file_ids)
         results = []
-        for media_file, document in self._session.execute(statement):
-            ocr = self._session.get(MediaOCR, media_file.file_id)
-            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
-            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow")
+        for media_file, document in doc_rows:
+            fid = media_file.file_id
+            result = self._build_result_dict(
+                media_file,
+                ocr=ocr_by_file.get(fid),
+                analysis=analysis_by_file.get(fid),
+                match_reason="shadow",
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts.get(fid, 0),
+            )
             result["search_document_version"] = document.version
             results.append(result)
         return results[:limit]
@@ -268,6 +301,8 @@ class SqlAlchemyHybridSearchBackend:
             return []
 
         fetch = max(1, limit * 4)
+        global _fts_warning_emitted
+
         # Primary FTS (unicode61 — word boundary, reliable for English)
         rows: list[tuple[str, float]] = []
         try:
@@ -281,8 +316,12 @@ class SqlAlchemyHybridSearchBackend:
                 {"query": fts_query, "limit": fetch},
             ).all()
             rows = [(str(r[0]), float(r[1] or 0.0)) for r in primary_rows]
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _fts_warning_emitted:
+                logger.warning(
+                    "FTS search_documents_fts unavailable (run DB migration?): %s", exc
+                )
+                _fts_warning_emitted = True
 
         # Trigram FTS (character n-gram — Korean substring search)
         # Uses raw LIKE-safe query since trigram doesn't support FTS5 prefix syntax
@@ -329,15 +368,22 @@ class SqlAlchemyHybridSearchBackend:
             media_file.file_id: (media_file, document)
             for media_file, document in self._session.execute(statement)
         }
+        all_file_ids = list(scored_ids.keys())
+        tags_by_file, face_counts, ocr_by_file, analysis_by_file = self._batch_load_supplements(all_file_ids)
         results = []
         for file_id, score in sorted(scored_ids.items(), key=lambda item: item[1]):
             row = by_id.get(file_id)
             if row is None:
                 continue
             media_file, document = row
-            ocr = self._session.get(MediaOCR, media_file.file_id)
-            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
-            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow")
+            result = self._build_result_dict(
+                media_file,
+                ocr=ocr_by_file.get(file_id),
+                analysis=analysis_by_file.get(file_id),
+                match_reason="shadow",
+                tags=tags_by_file.get(file_id, []),
+                face_count=face_counts.get(file_id, 0),
+            )
             result["search_document_version"] = document.version
             result["fts_score"] = score
             results.append(result)
@@ -375,15 +421,28 @@ class SqlAlchemyHybridSearchBackend:
             )
             .limit(max(1, limit))
         )
+        tag_result_rows = list(self._session.execute(exact_statement))
+        seen_ids: set[str] = set()
+        deduped_rows = []
+        for media_file, matched_tag_value in tag_result_rows:
+            if media_file.file_id not in seen_ids:
+                seen_ids.add(media_file.file_id)
+                deduped_rows.append((media_file, matched_tag_value))
+
+        file_ids = [mf.file_id for mf, _ in deduped_rows]
+        tags_by_file, face_counts, ocr_by_file, analysis_by_file = self._batch_load_supplements(file_ids)
+
         results = []
-        seen: set[str] = set()
-        for media_file, matched_tag_value in self._session.execute(exact_statement):
-            if media_file.file_id in seen:
-                continue
-            seen.add(media_file.file_id)
-            ocr = self._session.get(MediaOCR, media_file.file_id)
-            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
-            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="tag")
+        for media_file, matched_tag_value in deduped_rows:
+            fid = media_file.file_id
+            result = self._build_result_dict(
+                media_file,
+                ocr=ocr_by_file.get(fid),
+                analysis=analysis_by_file.get(fid),
+                match_reason="tag",
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts.get(fid, 0),
+            )
             result["tag_exact_match"] = matched_tag_value.casefold() == lowered
             result["matched_tag"] = matched_tag_value
             results.append(result)
@@ -423,10 +482,19 @@ class SqlAlchemyHybridSearchBackend:
             MediaFile.updated_at.desc(),
         ).limit(max(1, limit))
 
+        hint_rows = list(self._session.execute(statement))
+        file_ids = [mf.file_id for mf, _, _, _ in hint_rows]
+        tags_by_file, face_counts_batch, _, _ = self._batch_load_supplements(file_ids)
+
         results = []
-        for media_file, ocr, analysis, face_count in self._session.execute(statement):
-            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="shadow")
-            result["face_count"] = int(face_count or 0)
+        for media_file, ocr, analysis, face_count_val in hint_rows:
+            fid = media_file.file_id
+            result = self._build_result_dict(
+                media_file, ocr=ocr, analysis=analysis, match_reason="shadow",
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts_batch.get(fid, int(face_count_val or 0)),
+            )
+            result["face_count"] = face_counts_batch.get(fid, int(face_count_val or 0))
             result["hint_match"] = "face" if wants_faces else "text"
             results.append(result)
         return results
@@ -440,18 +508,31 @@ class SqlAlchemyHybridSearchBackend:
         date_from: Any | None = None,
         date_to: Any | None = None,
     ) -> list[dict]:
-        results = []
-        for hit in self._vector_index.search(
+        hits = self._vector_index.search(
             query_embedding,
             limit=limit,
             place_filter=place_filter,
             date_from=date_from,
             date_to=date_to,
-        ):
+        )
+        if not hits:
+            return []
+
+        file_ids = [str(hit.media_file.file_id) for hit in hits]
+        tags_by_file, face_counts, ocr_by_file, analysis_by_file = self._batch_load_supplements(file_ids)
+
+        results = []
+        for hit in hits:
             media_file = hit.media_file
-            ocr = self._session.get(MediaOCR, media_file.file_id)
-            analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
-            result = self._result_dict(media_file, ocr=ocr, analysis=analysis, match_reason="clip")
+            fid = str(media_file.file_id)
+            result = self._build_result_dict(
+                media_file,
+                ocr=ocr_by_file.get(fid),
+                analysis=analysis_by_file.get(fid),
+                match_reason="clip",
+                tags=tags_by_file.get(fid, []),
+                face_count=face_counts.get(fid, 0),
+            )
             result["distance"] = hit.distance
             result["embedding_model"] = hit.model_name
             result["embedding_version"] = hit.version
@@ -461,7 +542,9 @@ class SqlAlchemyHybridSearchBackend:
     def encode_text(self, query: str) -> bytes:
         try:
             clip_embedding.ensure_models()
-            return clip_embedding.encode_text(query)
+            # Truncate to CLIP's effective token budget (~77 tokens ≈ 200 chars)
+            truncated = query[:_CLIP_MAX_CHARS] if len(query) > _CLIP_MAX_CHARS else query
+            return clip_embedding.encode_text(truncated)
         except Exception:
             return b""
 
@@ -512,26 +595,58 @@ class SqlAlchemyHybridSearchBackend:
                 matched_ids.add(person.display_name.casefold())
         return matched_ids
 
-    def _result_dict(
+    def _batch_load_supplements(
+        self, file_ids: list[str]
+    ) -> tuple[dict[str, list[dict]], dict[str, int], dict[str, "MediaOCR"], dict[str, "MediaAnalysisSignal"]]:
+        """Batch-load tags, face counts, OCR, and analysis for a list of file IDs.
+
+        Eliminates N+1 query patterns when building result dicts for a list of
+        media files.  Returns four dicts keyed by file_id.
+        """
+        if not file_ids:
+            return {}, {}, {}, {}
+
+        tag_rows = self._session.execute(
+            select(Tag.file_id, Tag.tag_type, Tag.tag_value)
+            .where(Tag.file_id.in_(file_ids))
+            .order_by(Tag.tag_type.asc(), Tag.tag_value.asc())
+        ).all()
+        tags_by_file: dict[str, list[dict]] = {fid: [] for fid in file_ids}
+        for fid, tag_type, tag_value in tag_rows:
+            if fid in tags_by_file:
+                tags_by_file[fid].append({"type": tag_type, "value": tag_value})
+
+        face_rows = self._session.execute(
+            select(Face.file_id, func.count(Face.id).label("cnt"))
+            .where(Face.file_id.in_(file_ids))
+            .group_by(Face.file_id)
+        ).all()
+        face_counts: dict[str, int] = {str(fid): int(cnt) for fid, cnt in face_rows}
+
+        ocr_rows = self._session.scalars(
+            select(MediaOCR).where(MediaOCR.file_id.in_(file_ids))
+        ).all()
+        ocr_by_file: dict[str, MediaOCR] = {row.file_id: row for row in ocr_rows}
+
+        analysis_rows = self._session.scalars(
+            select(MediaAnalysisSignal).where(MediaAnalysisSignal.file_id.in_(file_ids))
+        ).all()
+        analysis_by_file: dict[str, MediaAnalysisSignal] = {row.file_id: row for row in analysis_rows}
+
+        return tags_by_file, face_counts, ocr_by_file, analysis_by_file
+
+    def _build_result_dict(
         self,
         media_file: MediaFile,
         *,
-        ocr: MediaOCR | None = None,
-        analysis: MediaAnalysisSignal | None = None,
+        ocr: "MediaOCR | None" = None,
+        analysis: "MediaAnalysisSignal | None" = None,
         match_reason: str,
         ocr_match_kind: str | None = None,
+        tags: list[dict] | None = None,
+        face_count: int = 0,
     ) -> dict:
-        tags = [
-            {"type": tag_type, "value": tag_value}
-            for tag_type, tag_value in self._session.execute(
-                select(Tag.tag_type, Tag.tag_value)
-                .where(Tag.file_id == media_file.file_id)
-                .order_by(Tag.tag_type.asc(), Tag.tag_value.asc())
-            )
-        ]
-        face_count = int(
-            self._session.scalar(select(func.count()).select_from(Face).where(Face.file_id == media_file.file_id)) or 0
-        )
+        """Build result dict from pre-loaded data — no extra DB queries."""
         payload = {
             "file_id": media_file.file_id,
             "filename": media_file.filename,
@@ -541,7 +656,7 @@ class SqlAlchemyHybridSearchBackend:
             "status": media_file.status,
             "captured_at": media_file.exif_datetime,
             "updated_at": media_file.updated_at,
-            "tags": tags,
+            "tags": tags if tags is not None else [],
             "ocr_text": ocr.text_content if ocr is not None else "",
             "ocr_engine": ocr.engine if ocr is not None else None,
             "ocr_match_kind": ocr_match_kind,
@@ -561,6 +676,37 @@ class SqlAlchemyHybridSearchBackend:
                 }
             )
         return payload
+
+    def _result_dict(
+        self,
+        media_file: MediaFile,
+        *,
+        ocr: MediaOCR | None = None,
+        analysis: MediaAnalysisSignal | None = None,
+        match_reason: str,
+        ocr_match_kind: str | None = None,
+    ) -> dict:
+        """Build result dict — loads tags/face_count individually (use _build_result_dict for batches)."""
+        tags = [
+            {"type": tag_type, "value": tag_value}
+            for tag_type, tag_value in self._session.execute(
+                select(Tag.tag_type, Tag.tag_value)
+                .where(Tag.file_id == media_file.file_id)
+                .order_by(Tag.tag_type.asc(), Tag.tag_value.asc())
+            )
+        ]
+        face_count = int(
+            self._session.scalar(select(func.count()).select_from(Face).where(Face.file_id == media_file.file_id)) or 0
+        )
+        return self._build_result_dict(
+            media_file,
+            ocr=ocr,
+            analysis=analysis,
+            match_reason=match_reason,
+            ocr_match_kind=ocr_match_kind,
+            tags=tags,
+            face_count=face_count,
+        )
 
 
 def _like_pattern(query: str) -> str:

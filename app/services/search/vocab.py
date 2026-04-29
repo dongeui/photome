@@ -70,9 +70,14 @@ class TagVocabularyCache:
             return TagVocabularyCache._cache
         return self._refresh(now)
 
-    def invalidate(self) -> None:
-        """Force reload on next access (call after semantic maintenance)."""
-        TagVocabularyCache._loaded_at = 0.0
+    @classmethod
+    def invalidate(cls) -> None:
+        """Force reload on next access (call after semantic maintenance).
+
+        This is a classmethod so it can be called without a session instance:
+            TagVocabularyCache.invalidate()
+        """
+        cls._loaded_at = 0.0
 
     def _refresh(self, now: float) -> TagVocabulary:
         try:
