@@ -80,9 +80,11 @@ class SqlAlchemyHybridSearchBackend:
         *,
         embeddings_root: Path,
         vector_index: VectorIndexBackend | None = None,
+        clip_enabled: bool = True,
     ) -> None:
         self._session = session
         self._embeddings_root = embeddings_root
+        self._clip_enabled = clip_enabled
         _backend_setting = os.environ.get("PHOTOME_VECTOR_BACKEND", "auto")
         self._vector_index = vector_index or build_vector_index(
             session, embeddings_root=embeddings_root, backend=_backend_setting
@@ -92,6 +94,10 @@ class SqlAlchemyHybridSearchBackend:
     def get_tag_vocabulary(self):
         """Return current TagVocabulary snapshot (TTL-cached, from DB)."""
         return self._tag_vocab_cache.get()
+
+    def supports_parallel_channels(self) -> bool:
+        """SQLAlchemy sessions are not safe to share across worker threads."""
+        return False
 
     def load_persisted_weights(self, intent: str, reason: str) -> dict[str, float] | None:
         """Return persisted weights for intent+reason, or None if not customised."""
@@ -542,6 +548,8 @@ class SqlAlchemyHybridSearchBackend:
         return results
 
     def encode_text(self, query: str) -> bytes:
+        if not self._clip_enabled:
+            return b""
         try:
             clip_embedding.ensure_models()
             # Truncate to CLIP's effective token budget (~77 tokens ≈ 200 chars)

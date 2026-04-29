@@ -39,6 +39,11 @@ class FakeBackend:
         return []
 
 
+class ReverseReranker:
+    def rerank(self, results: list[dict], plan) -> list[dict]:  # noqa: ANN001
+        return list(reversed(results))
+
+
 def test_korean_query_expands_for_clip() -> None:
     variants = expand_for_clip("자전거")
 
@@ -112,3 +117,12 @@ def test_semantic_query_uses_auto_tags_as_ranking_signal() -> None:
     assert meta["effective_mode"] == "semantic"
     assert results[0]["file_id"] == "auto-baby"
     assert "태그 일치" in results[0]["match_explanation"]
+
+
+def test_custom_reranker_order_is_preserved() -> None:
+    service = HybridSearchService(FakeBackend(), reranker=ReverseReranker())
+
+    results, meta = service.search_with_meta("random visual query", limit=5, mode="hybrid")
+
+    assert meta["effective_mode"] == "hybrid"
+    assert [item["file_id"] for item in results[:2]] == ["file-b", "file-a"]

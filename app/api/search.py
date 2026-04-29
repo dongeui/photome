@@ -6,7 +6,7 @@ from datetime import date, datetime, time
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select, text
 
 from app.api.deps import require_state
@@ -85,7 +85,11 @@ async def search_benchmark(
     database = require_state(request, "database")
     settings = require_state(request, "settings")
     with database.session_factory() as session:
-        backend = SqlAlchemyHybridSearchBackend(session, embeddings_root=settings.embeddings_root)
+        backend = SqlAlchemyHybridSearchBackend(
+            session,
+            embeddings_root=settings.embeddings_root,
+            clip_enabled=settings.semantic_clip_enabled,
+        )
         service = HybridSearchService(backend)
         return run_benchmark_suite(
             service,
@@ -121,7 +125,11 @@ def _search_payload(
     database = require_state(request, "database")
     settings = require_state(request, "settings")
     with database.session_factory() as session:
-        backend = SqlAlchemyHybridSearchBackend(session, embeddings_root=settings.embeddings_root)
+        backend = SqlAlchemyHybridSearchBackend(
+            session,
+            embeddings_root=settings.embeddings_root,
+            clip_enabled=settings.semantic_clip_enabled,
+        )
         service = HybridSearchService(backend)
         items, meta = service.search_with_meta(
             q,
@@ -133,6 +141,7 @@ def _search_payload(
             debug=debug,
             weight_overrides=weight_overrides,
         )
+        session.commit()
     return {"items": items, "total": len(items), "query": q, "meta": meta}
 
 
@@ -173,9 +182,15 @@ class WeightProfileResponse(BaseModel):
 
 
 class WeightProfileUpdate(BaseModel):
-    w_ocr: float
-    w_clip: float
-    w_shadow: float
+    w_ocr: float = Field(ge=0)
+    w_clip: float = Field(ge=0)
+    w_shadow: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def require_positive_total(self) -> "WeightProfileUpdate":
+        if self.w_ocr + self.w_clip + self.w_shadow <= 0:
+            raise ValueError("at least one search weight must be greater than 0")
+        return self
 
 
 @router.get("/search/weights", response_model=list[WeightProfileResponse])
@@ -225,10 +240,12 @@ def upsert_weight_profile(
             existing.w_shadow = body.w_shadow
         session.commit()
         session.refresh(existing)
-        return WeightProfileResponse(
+        response = WeightProfileResponse(
             intent=existing.intent, reason=existing.reason,
             w_ocr=existing.w_ocr, w_clip=existing.w_clip, w_shadow=existing.w_shadow,
         )
+    clear_query_cache()
+    return response
 
 
 @router.delete("/search/weights/{intent}/{reason}", status_code=204)
@@ -246,6 +263,7 @@ def delete_weight_profile(intent: str, reason: str, request: Request) -> None:
             raise HTTPException(status_code=404, detail="Weight profile not found")
         session.delete(row)
         session.commit()
+    clear_query_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -304,13 +322,15 @@ def add_feedback(body: FeedbackRequest, request: Request) -> FeedbackResponse:
             existing.tag_correction = body.tag_correction
         session.commit()
         session.refresh(existing)
-        return FeedbackResponse(
+        response = FeedbackResponse(
             id=existing.id,
             file_id=existing.file_id,
             action=existing.action,
             query_hint=existing.query_hint,
             tag_correction=existing.tag_correction,
         )
+    clear_query_cache()
+    return response
 
 
 @router.get("/search/feedback", response_model=list[FeedbackResponse])
@@ -341,6 +361,7 @@ def delete_feedback(feedback_id: int, request: Request) -> None:
             raise HTTPException(status_code=404, detail="Feedback entry not found")
         session.delete(row)
         session.commit()
+    clear_query_cache()
 
 
 @router.get("/search/weights/defaults", response_model=list[WeightProfileResponse])

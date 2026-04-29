@@ -7,11 +7,11 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from app.core.settings import load_settings
 from app.main import create_app
-from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument
+from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
 
 
 SCAN_DELAY_SECONDS = 1.1
@@ -97,6 +97,85 @@ def test_semantic_maintenance_only_builds_missing_search_documents(
 
     second_no_op = client.post("/scan/semantic-maintenance").json()
     assert second_no_op["pending"] == 0
+
+
+def test_search_event_is_persisted_after_search(
+    client: TestClient,
+    source_root: Path,
+) -> None:
+    create_image(source_root / "event-receipt.jpg")
+    scan_twice(client)
+
+    response = client.get("/search", params={"q": "receipt"})
+    cached_response = client.get("/search", params={"q": "receipt"})
+
+    assert response.status_code == 200
+    assert cached_response.status_code == 200
+    with client.app.state.database.session_factory() as session:
+        count = session.scalar(select(func.count()).select_from(SearchEvent))
+        assert count == 2
+
+
+def test_date_fallback_does_not_recurse_on_zero_results(client: TestClient) -> None:
+    response = client.get("/search", params={"q": "2099년 12월 31일 qqqzzznotfound"})
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
+def test_clip_disabled_search_does_not_load_clip_model(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.embedding import clip as clip_embedding
+
+    called = False
+
+    def mark_called() -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(clip_embedding, "ensure_models", mark_called)
+
+    response = client.get("/search", params={"q": "얼굴"})
+
+    assert response.status_code == 200
+    assert called is False
+
+
+def test_feedback_invalidates_cached_search_results(
+    client: TestClient,
+    source_root: Path,
+) -> None:
+    create_image(source_root / "cached-receipt.jpg")
+    scan_twice(client)
+
+    first = client.get("/search", params={"q": "receipt"}).json()
+    assert first["total"] == 1
+    file_id = first["items"][0]["file_id"]
+
+    feedback = client.post(
+        "/search/feedback",
+        json={"file_id": file_id, "action": "hide"},
+    )
+    assert feedback.status_code == 201
+
+    second = client.get("/search", params={"q": "receipt"}).json()
+    assert second["total"] == 0
+
+
+def test_weight_profile_rejects_invalid_values(client: TestClient) -> None:
+    negative = client.put(
+        "/search/weights/hybrid/fallback",
+        json={"w_ocr": -1, "w_clip": 0.5, "w_shadow": 0.5},
+    )
+    assert negative.status_code == 422
+
+    zero_total = client.put(
+        "/search/weights/hybrid/fallback",
+        json={"w_ocr": 0, "w_clip": 0, "w_shadow": 0},
+    )
+    assert zero_total.status_code == 422
 
 
 def test_media_annotation_updates_display_name_description_and_custom_tags(

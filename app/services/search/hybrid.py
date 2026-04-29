@@ -185,6 +185,8 @@ class HybridSearchService:
         mode: str = "hybrid",
         debug: bool = False,
         weight_overrides: dict[str, float] | None = None,
+        allow_date_fallback: bool = True,
+        use_planner_dates: bool = True,
     ) -> tuple[list[dict], dict]:
         if not query.strip():
             return [], {"effective_mode": mode, "intent_reason": "empty"}
@@ -206,6 +208,13 @@ class HybridSearchService:
                 results, meta = cached
                 meta = dict(meta)
                 meta["cache_hit"] = True
+                self._log_search_event(
+                    query,
+                    effective_mode=str(meta.get("effective_mode") or mode),
+                    intent=str((meta.get("query_plan") or {}).get("intent") or ""),
+                    result_count=len(results),
+                    fallback=meta.get("fallback"),
+                )
                 return results, meta
 
         # Load tag vocabulary from DB (TTL-cached) so planner recognises
@@ -221,7 +230,7 @@ class HybridSearchService:
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
 
         # Auto-extract date range from natural language when caller didn't specify one
-        if date_from is None and date_to is None and plan.date_from is not None:
+        if use_planner_dates and date_from is None and date_to is None and plan.date_from is not None:
             date_from = datetime.combine(plan.date_from, time.min)
             date_to = datetime.combine(plan.date_to, time.max) if plan.date_to else None
 
@@ -240,12 +249,22 @@ class HybridSearchService:
         shadow_results: list[dict] = []
         clip_results: list[dict] = []
 
-        if need_shadow and need_clip:
+        supports_parallel = False
+        if hasattr(self._backend, "supports_parallel_channels"):
+            try:
+                supports_parallel = bool(self._backend.supports_parallel_channels())
+            except Exception:
+                supports_parallel = False
+
+        if need_shadow and need_clip and supports_parallel:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fut_shadow = pool.submit(self._backend.search_by_shadow_doc, keyword_query, limit=limit)
                 fut_clip = pool.submit(self._search_clip_variants, plan, limit, place_filter, date_from, date_to)
                 shadow_results = fut_shadow.result()
                 clip_results = fut_clip.result()
+        elif need_shadow and need_clip:
+            shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
+            clip_results = self._search_clip_variants(plan, limit, place_filter, date_from, date_to)
         elif need_shadow:
             shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
         elif need_clip:
@@ -299,11 +318,11 @@ class HybridSearchService:
         apply_context_filter_boost(merged, plan)
         apply_date_soft_scoring(merged, plan)
         apply_feedback_boost(merged, promoted_ids)
+        merged.sort(key=search_sort_key, reverse=True)
         merged = remove_near_duplicates(merged)
         merged = apply_diversity_cap(merged)
         merged = self._reranker.rerank(merged, plan)
         set_match_explanations(merged)
-        merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
 
         meta: dict = {
@@ -314,7 +333,7 @@ class HybridSearchService:
         }
 
         # Zero-result fallback 1: loosen date filter and retry once
-        if not final and (plan.date_from is not None) and not debug:
+        if allow_date_fallback and not final and (plan.date_from is not None) and not debug:
             loosened = self._loosened_date_fallback(
                 query=query,
                 limit=limit,
@@ -381,17 +400,13 @@ class HybridSearchService:
             _cache_set(cache_key, final, meta)
 
         # Implicit feedback: log every search event for future analysis/tuning
-        if hasattr(self._backend, "log_search_event"):
-            try:
-                self._backend.log_search_event(
-                    query,
-                    effective_mode=effective_mode,
-                    intent=plan.intent,
-                    result_count=len(final),
-                    fallback=meta.get("fallback"),
-                )
-            except Exception:
-                pass
+        self._log_search_event(
+            query,
+            effective_mode=effective_mode,
+            intent=plan.intent,
+            result_count=len(final),
+            fallback=meta.get("fallback"),
+        )
 
         logger.debug(
             "search query=%r mode=%s intent=%s channels=ocr:%d clip:%d shadow:%d final=%d",
@@ -399,6 +414,28 @@ class HybridSearchService:
             len(ocr_results), len(clip_results), len(shadow_results), len(final),
         )
         return final, meta
+
+    def _log_search_event(
+        self,
+        query: str,
+        *,
+        effective_mode: str,
+        intent: str,
+        result_count: int,
+        fallback: str | None = None,
+    ) -> None:
+        if not hasattr(self._backend, "log_search_event"):
+            return
+        try:
+            self._backend.log_search_event(
+                query,
+                effective_mode=effective_mode,
+                intent=intent,
+                result_count=result_count,
+                fallback=fallback,
+            )
+        except Exception:
+            pass
 
     def _loosened_date_fallback(
         self,
@@ -424,6 +461,8 @@ class HybridSearchService:
             mode=mode,
             debug=False,
             weight_overrides=weight_overrides,
+            allow_date_fallback=False,
+            use_planner_dates=False,
         )
         return results
 

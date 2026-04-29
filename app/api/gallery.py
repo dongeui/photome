@@ -75,7 +75,11 @@ async def gallery_page(
     with database.session_factory() as session:
         if q and q.strip():
             settings = require_state(request, "settings")
-            backend = SqlAlchemyHybridSearchBackend(session, embeddings_root=settings.embeddings_root)
+            backend = SqlAlchemyHybridSearchBackend(
+                session,
+                embeddings_root=settings.embeddings_root,
+                clip_enabled=settings.semantic_clip_enabled,
+            )
             service = HybridSearchService(backend)
             search_results, search_meta = service.search_with_meta(
                 q,
