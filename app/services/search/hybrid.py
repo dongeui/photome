@@ -53,6 +53,8 @@ class HybridSearchBackend(Protocol):
 
     def encode_text(self, query: str) -> bytes: ...
 
+    def suggest_related_tags(self, query: str, *, limit: int = 8) -> list[str]: ...
+
 
 class HybridSearchService:
     def __init__(self, backend: HybridSearchBackend) -> None:
@@ -108,7 +110,13 @@ class HybridSearchService:
         apply_exact_tag_boost(merged)
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
-        return merged[:limit], {"effective_mode": effective_mode, "intent_reason": intent_reason}
+        final = merged[:limit]
+        meta: dict = {"effective_mode": effective_mode, "intent_reason": intent_reason}
+        if not final and hasattr(self._backend, "suggest_related_tags"):
+            suggestions = self._backend.suggest_related_tags(cleaned, limit=8)
+            if suggestions:
+                meta["suggestions"] = suggestions
+        return final, meta
 
     def _search_clip_variants(
         self,
@@ -257,13 +265,20 @@ def apply_exact_ocr_boost(query: str, results: list[dict]) -> None:
     for result in results:
         ocr_text = str(result.get("ocr_text") or "")
         if not ocr_text:
+            # Still apply ngram score bonus when OCR text is absent
+            ngram = float(result.get("ngram_score") or 0.0)
+            if ngram > 0:
+                result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + ngram * 0.10)
             continue
         ocr_lower = ocr_text.casefold()
+        ngram_bonus = float(result.get("ngram_score") or 0.0) * 0.08
         if lowered in ocr_lower:
-            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.22)
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.22 + ngram_bonus)
             result["ocr_exact_match"] = True
         elif tokens and all(token in ocr_lower for token in tokens):
-            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.12)
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + 0.12 + ngram_bonus)
+        elif ngram_bonus > 0:
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + ngram_bonus)
 
 
 def apply_exact_tag_boost(results: list[dict]) -> None:

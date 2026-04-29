@@ -130,13 +130,38 @@ TYPO_CORRECTIONS = {
 
 # ---------------------------------------------------------------------------
 # Filler words to strip from Korean natural language queries
-# (kept for CLIP; date expressions handled separately)
 # ---------------------------------------------------------------------------
 _KO_FILLER = re.compile(
     r"(?:찍은|찍었던|찍힌|촬영한|촬영된|에서|에서의|에서 찍은|에서 찍|에서 본|에서 본)\s*사진|"
     r"찍은\s*사진|찍은\s*거|찍은\s*것|사진\s*좀|의\s*사진|이\s*사진|인\s*사진",
     re.UNICODE,
 )
+
+# Korean particles / endings to strip token-by-token
+# Order matters: longer suffixes first to avoid partial matches
+_KO_PARTICLES = (
+    "에서의", "으로의", "로부터", "에서", "으로", "에게", "한테", "부터",
+    "까지", "마다", "이나", "이랑", "와", "과", "이랑", "하고",
+    "에서", "에서", "에게", "에서", "에서", "에서",
+    "이라", "이라는", "라는", "이는", "이고", "이며",
+    "에서", "에서", "에서", "에서", "에서",
+    "에서", "에서",
+    "에서", "에의", "에의",
+    "의", "을", "를", "이", "가", "은", "는",
+    "에", "로", "와", "과",
+)
+# Build a unique ordered tuple (de-dup while preserving order)
+_seen: set[str] = set()
+_KO_PARTICLES_UNIQUE: tuple[str, ...] = tuple(
+    p for p in (
+        "에서의", "으로의", "로부터", "에서", "으로", "에게", "한테",
+        "부터", "까지", "마다", "이나", "이랑", "하고",
+        "이라는", "라는", "이라", "이고", "이며",
+        "에의", "의", "을", "를", "이", "가", "은", "는", "에", "로", "와", "과",
+    )
+    if p not in _seen and not _seen.add(p)  # type: ignore[func-returns-value]
+)
+del _seen
 
 # ---------------------------------------------------------------------------
 # English expansions for common photo terms
@@ -271,7 +296,32 @@ def normalize_query(query: str) -> str:
         return ""
     for typo, correction in TYPO_CORRECTIONS.items():
         cleaned = cleaned.replace(typo, correction)
-    return cleaned
+    cleaned = strip_korean_particles(cleaned)
+    return cleaned.strip()
+
+
+def strip_korean_particles(text: str) -> str:
+    """Remove common Korean postpositional particles from each token.
+
+    Only strips if the token contains Hangul and at least 2 characters
+    remain after stripping, to avoid accidentally removing word endings
+    that are part of the stem (e.g. "동의" should not become "동").
+    """
+    tokens = text.split()
+    result = []
+    for token in tokens:
+        if _has_hangul(token):
+            for particle in _KO_PARTICLES_UNIQUE:
+                candidate = token[: -len(particle)]
+                if token.endswith(particle) and len(candidate) >= 2:
+                    token = candidate
+                    break
+        result.append(token)
+    return " ".join(result)
+
+
+def _has_hangul(text: str) -> bool:
+    return bool(re.search(r"[가-힣]", text))
 
 
 def translate_to_english(query: str) -> str | None:
@@ -333,10 +383,6 @@ def _translate_with_opus(query: str) -> str | None:
         return translated or None
     except Exception:
         return None
-
-
-def _has_hangul(text: str) -> bool:
-    return bool(re.search(r"[가-힣]", text))
 
 
 def _dedupe(values: list[str]) -> list[str]:

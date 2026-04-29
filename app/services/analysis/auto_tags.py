@@ -3,13 +3,48 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+import re
 
 import numpy as np
 
 from app.core.contracts import MediaTagInput
 from app.services.embedding import clip as clip_embedding
+
+# ---------------------------------------------------------------------------
+# Filename keyword → tag mapping (common Korean/English patterns in filenames)
+# ---------------------------------------------------------------------------
+_FILENAME_KEYWORD_TAGS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"kakao|카카오|kkt", re.IGNORECASE), "kakaotalk"),
+    (re.compile(r"screenshot|screen|스크린|캡처", re.IGNORECASE), "screenshot"),
+    (re.compile(r"receipt|영수증", re.IGNORECASE), "receipt"),
+    (re.compile(r"beach|바다|해변", re.IGNORECASE), "beach"),
+    (re.compile(r"travel|여행|trip|tour", re.IGNORECASE), "travel"),
+    (re.compile(r"food|meal|음식|식사|맛집", re.IGNORECASE), "food"),
+    (re.compile(r"wedding|결혼|웨딩", re.IGNORECASE), "wedding"),
+    (re.compile(r"birthday|생일", re.IGNORECASE), "birthday"),
+    (re.compile(r"party|파티", re.IGNORECASE), "celebration"),
+    (re.compile(r"dog|강아지|puppy", re.IGNORECASE), "animal"),
+    (re.compile(r"cat|고양이", re.IGNORECASE), "animal"),
+    (re.compile(r"baby|아기|infant", re.IGNORECASE), "baby"),
+    (re.compile(r"selfie|셀카|셀피", re.IGNORECASE), "person"),
+    (re.compile(r"family|가족", re.IGNORECASE), "group"),
+    (re.compile(r"jeju|제주", re.IGNORECASE), "travel"),
+    (re.compile(r"seoul|서울", re.IGNORECASE), "travel"),
+    (re.compile(r"mountain|산|등산|hiking", re.IGNORECASE), "mountain"),
+    (re.compile(r"cafe|카페|coffee|커피", re.IGNORECASE), "coffee"),
+    (re.compile(r"night|야경|야간", re.IGNORECASE), "night"),
+]
+
+# EXIF month → season tag
+_MONTH_SEASON: dict[int, str] = {
+    3: "spring", 4: "spring", 5: "spring",
+    6: "summer", 7: "summer", 8: "summer",
+    9: "autumn", 10: "autumn", 11: "autumn",
+    12: "winter", 1: "winter", 2: "winter",
+}
 
 
 @dataclass(frozen=True)
@@ -126,6 +161,25 @@ def _load_embedding_vector(embedding_ref: str, embeddings_root: Path) -> np.ndar
         return np.load(absolute_path).astype("float32")
     except Exception:
         return None
+
+
+def tags_from_filename(filename: str) -> list[MediaTagInput]:
+    """Derive auto-tags from the filename (keyword matching, no ML)."""
+    tags: list[str] = []
+    stem = Path(filename).stem
+    for pattern, tag in _FILENAME_KEYWORD_TAGS:
+        if pattern.search(stem):
+            tags.append(tag)
+    return _to_auto_tags(tags)
+
+
+def tags_from_datetime(dt: datetime) -> list[MediaTagInput]:
+    """Add season and year auto-tags from EXIF capture datetime."""
+    tags: list[str] = []
+    season = _MONTH_SEASON.get(dt.month)
+    if season:
+        tags.append(season)
+    return _to_auto_tags(tags)
 
 
 def _looks_like_receipt(text: str) -> bool:

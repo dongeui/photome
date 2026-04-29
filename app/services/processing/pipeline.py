@@ -336,7 +336,14 @@ class ProcessingPipeline:
         preserved_tags = [tag for tag in preserved_tags if tag.tag_type != "auto"]
         place_tags = self._materialize_place_tags(media_file)
         person_tags = existing_person_tags
-        auto_tag_inputs: list[MediaTagInput] = []
+        # Filename and datetime-derived auto tags (no ML, always fast)
+        filename_tags = auto_tags.tags_from_filename(media_file.filename)
+        datetime_tags = (
+            auto_tags.tags_from_datetime(media_file.exif_datetime)
+            if media_file.exif_datetime is not None
+            else []
+        )
+        auto_tag_inputs: list[MediaTagInput] = list(filename_tags) + list(datetime_tags)
         face_result: FaceMaterializationResult | None = None
         analysis_warnings: list[str] = []
         media_kind = media_file.media_kind
@@ -354,7 +361,8 @@ class ProcessingPipeline:
                 analysis_warnings.extend(face_result.warnings)
             semantic_result = self._materialize_image_semantics(session, media_file)
             if semantic_result:
-                auto_tag_inputs = semantic_result.pop("_auto_tag_inputs", [])
+                semantic_auto_tags = semantic_result.pop("_auto_tag_inputs", [])
+                auto_tag_inputs = list(auto_tags.merge_auto_tags(auto_tag_inputs, semantic_auto_tags))
                 result["semantic"] = semantic_result
             catalog.set_media_status(media_file.file_id, status="thumb_done", now=datetime.utcnow())
 

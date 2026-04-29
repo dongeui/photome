@@ -34,6 +34,9 @@ class FakeBackend:
             return b"face"
         return b"embedding"
 
+    def suggest_related_tags(self, query: str, *, limit: int = 8) -> list[str]:
+        return []
+
 
 def test_korean_query_expands_for_clip() -> None:
     variants = expand_for_clip("자전거")

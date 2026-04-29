@@ -99,29 +99,34 @@ class SqlAlchemyHybridSearchBackend:
         # Supplement with n-gram index results for Korean text when main results are few
         grams = _korean_2grams(query)
         if grams and len(rows) < limit:
-            gram_file_ids = self._ngram_file_ids(grams, exclude=seen_ids, limit=limit * 2)
-            if gram_file_ids:
+            gram_hits = self._ngram_scored_ids(grams, exclude=seen_ids, limit=limit * 2)
+            if gram_hits:
+                max_hits = max(count for _, count in gram_hits) or 1
+                hit_counts = {fid: count for fid, count in gram_hits}
                 ngram_statement = (
                     select(MediaFile, MediaOCR, MediaAnalysisSignal)
                     .join(MediaOCR, MediaOCR.file_id == MediaFile.file_id)
                     .outerjoin(MediaAnalysisSignal, MediaAnalysisSignal.file_id == MediaFile.file_id)
-                    .where(MediaFile.file_id.in_(gram_file_ids))
+                    .where(MediaFile.file_id.in_([fid for fid, _ in gram_hits]))
                     .where(MediaFile.status != "missing")
                 )
                 for media_file, ocr, analysis in self._session.execute(ngram_statement):
-                    rows.append(
-                        self._result_dict(
-                            media_file,
-                            ocr=ocr,
-                            analysis=analysis,
-                            match_reason="ocr",
-                            ocr_match_kind="ngram",
-                        )
+                    row = self._result_dict(
+                        media_file,
+                        ocr=ocr,
+                        analysis=analysis,
+                        match_reason="ocr",
+                        ocr_match_kind="ngram",
                     )
+                    # Encode gram coverage as a normalised pre-score (used by RRF)
+                    row["ngram_score"] = hit_counts.get(media_file.file_id, 0) / max_hits
+                    rows.append(row)
 
         return rows[:limit]
 
-    def _ngram_file_ids(self, grams: list[str], *, exclude: set[str], limit: int) -> list[str]:
+    def _ngram_scored_ids(
+        self, grams: list[str], *, exclude: set[str], limit: int
+    ) -> list[tuple[str, int]]:
         statement = (
             select(MediaOCRGram.file_id, func.count().label("hit_count"))
             .where(MediaOCRGram.gram.in_(grams))
@@ -130,8 +135,8 @@ class SqlAlchemyHybridSearchBackend:
             .limit(limit)
         )
         return [
-            file_id
-            for file_id, _ in self._session.execute(statement)
+            (file_id, int(hit_count))
+            for file_id, hit_count in self._session.execute(statement)
             if file_id not in exclude
         ]
 
@@ -308,6 +313,36 @@ class SqlAlchemyHybridSearchBackend:
             return clip_embedding.encode_text(query)
         except Exception:
             return b""
+
+    def suggest_related_tags(self, query: str, *, limit: int = 8) -> list[str]:
+        """Return existing tag values that partially match the query.
+
+        Used to populate "did you mean?" suggestions when a search returns
+        no results.
+        """
+        if not query.strip():
+            return []
+        lowered = query.casefold().strip()
+        # Collect synonyms as candidate values to look for
+        candidates = {lowered} | TAG_SYNONYMS.get(lowered, set())
+        for token in lowered.split():
+            candidates |= TAG_SYNONYMS.get(token, set())
+
+        # Find tags that exist in the DB matching any candidate or partial
+        pattern = f"%{lowered}%"
+        statement = (
+            select(Tag.tag_value, func.count(Tag.file_id).label("freq"))
+            .where(
+                or_(
+                    func.lower(Tag.tag_value).in_(list(candidates)),
+                    func.lower(Tag.tag_value).like(pattern),
+                )
+            )
+            .group_by(Tag.tag_value)
+            .order_by(func.count(Tag.file_id).desc())
+            .limit(limit)
+        )
+        return [value for value, _ in self._session.execute(statement)]
 
     def _load_embedding_vector(self, embedding_ref: str):
         try:
