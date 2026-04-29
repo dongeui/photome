@@ -24,6 +24,7 @@ from app.models.face import Face
 from app.models.media import MediaFile
 from app.models.observation import ScanObservation
 from app.models.person import Person
+from app.models.semantic import MediaEmbedding
 from app.models.tag import Tag
 
 
@@ -597,6 +598,22 @@ class MediaCatalog:
             .where(
                 MediaFile.status == "metadata_done",
                 MediaFile.media_kind.in_(("image", "video")),
+            )
+            .order_by(MediaFile.updated_at.asc(), MediaFile.file_id.asc())
+        )
+        if limit is not None:
+            statement = statement.limit(max(1, limit))
+        return list(self._session.scalars(statement))
+
+    def list_media_needing_embedding(self, *, limit: int | None = None) -> list[MediaFile]:
+        """Return processed media that have no CLIP embedding yet."""
+        has_embedding = select(MediaEmbedding.file_id).distinct().subquery()
+        statement = (
+            select(MediaFile)
+            .where(
+                MediaFile.status.in_(("thumb_done", "analysis_done")),
+                MediaFile.media_kind.in_(("image", "video")),
+                MediaFile.file_id.not_in(select(has_embedding.c.file_id)),
             )
             .order_by(MediaFile.updated_at.asc(), MediaFile.file_id.asc())
         )

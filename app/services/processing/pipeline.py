@@ -15,7 +15,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.contracts import MediaFaceInput, MediaKind, MediaTagInput, ProcessingJobKind, ProcessingJobState
+from app.core.contracts import DerivedAssetKind, MediaFaceInput, MediaKind, MediaTagInput, ProcessingJobKind, ProcessingJobState
 from app.models.job import ProcessingJob
 from app.models.media import MediaFile
 from app.models.person import Person
@@ -178,6 +178,66 @@ class ProcessingPipeline:
 
             session.commit()
             return self._to_summary(job)
+
+    def run_semantic_backfill(self, *, batch_size: int = 50) -> dict[str, Any]:
+        """Generate CLIP embeddings for media that were processed before CLIP was enabled."""
+        if not self._semantic_clip_enabled:
+            return {"skipped": True, "reason": "clip_disabled", "pending": 0, "succeeded": 0, "failed": 0}
+
+        with self._session_factory() as session:
+            catalog = MediaCatalog(session)
+            pending = catalog.list_media_needing_embedding(limit=batch_size)
+            semantic_catalog = SemanticCatalog(session)
+            succeeded = failed = 0
+
+            for media_file in pending:
+                try:
+                    embedding_result = self._materialize_clip_embedding(media_file)
+                    if embedding_result:
+                        semantic_catalog.register_embedding(media_file.file_id, **embedding_result)
+                        clip_rel = Path(embedding_result["embedding_ref"])
+                        catalog.register_derived_asset(
+                            media_file.file_id,
+                            DerivedAssetKind.CLIP_EMBEDDING,
+                            clip_rel,
+                            version=embedding_result["version"],
+                            content_type="application/octet-stream",
+                        )
+                        embedding_tags = auto_tags.tags_from_embedding_file(
+                            embedding_result["embedding_ref"],
+                            self._embeddings_root,
+                        )
+                        if embedding_tags:
+                            existing_auto_tags = [
+                                MediaTagInput(tag_type=t.tag_type, tag_value=t.tag_value)
+                                for t in media_file.tags
+                                if t.tag_type == "auto"
+                            ]
+                            merged = auto_tags.merge_auto_tags(existing_auto_tags, embedding_tags)
+                            catalog.replace_tags_for_types(media_file.file_id, ["auto"], merged)
+                            semantic_catalog.upsert_auto_tag_state(
+                                media_file.file_id,
+                                tags=merged,
+                                version=self._semantic_auto_tag_version,
+                            )
+                        succeeded += 1
+                    else:
+                        failed += 1
+                except Exception as exc:
+                    logger.warning(
+                        "semantic backfill failed",
+                        extra={"file_id": media_file.file_id, "error": str(exc)},
+                    )
+                    failed += 1
+
+            session.commit()
+            return {
+                "skipped": False,
+                "pending": len(pending),
+                "succeeded": succeeded,
+                "failed": failed,
+                "has_more": len(pending) == batch_size,
+            }
 
     def status_snapshot(self) -> dict[str, Any]:
         with self._session_factory() as session:
@@ -347,6 +407,15 @@ class ProcessingPipeline:
             embedding_result = self._materialize_clip_embedding(media_file)
             if embedding_result:
                 semantic_catalog.register_embedding(media_file.file_id, **embedding_result)
+                # Also track as a versioned DerivedAsset for catalog visibility
+                clip_rel = Path(embedding_result["embedding_ref"])
+                MediaCatalog(session).register_derived_asset(
+                    media_file.file_id,
+                    DerivedAssetKind.CLIP_EMBEDDING,
+                    clip_rel,
+                    version=embedding_result["version"],
+                    content_type="application/octet-stream",
+                )
                 result["embedding"] = embedding_result
                 embedding_tags = auto_tags.tags_from_embedding_file(
                     embedding_result["embedding_ref"],
