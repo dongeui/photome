@@ -253,7 +253,7 @@ output:
 - [x] QueryPlanner
 - [x] VectorIndexBackend
 - [x] `/search/debug` and dashboard search tuning panel
-- [ ] synthetic NL QA 확장
+- [x] synthetic benchmark suite for query planning and channel behavior
 
 ### R2 — 이미지 이해 품질 개선
 

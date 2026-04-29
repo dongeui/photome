@@ -53,6 +53,12 @@ Inspect query planning and ranking channels:
 GET /search/debug?q=작년 여름 바다에서 가족이랑 찍은 사진
 ```
 
+Run the synthetic benchmark suite for query planning and channel behavior:
+
+```
+GET /search/benchmark
+```
+
 After enabling CLIP, backfill existing media:
 
 ```

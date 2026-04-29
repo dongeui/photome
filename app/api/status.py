@@ -295,6 +295,31 @@ async def dashboard(request: Request) -> HTMLResponse:
       line-height: 1.45;
       white-space: pre-wrap;
     }}
+    .benchmark-actions {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }}
+    .benchmark-actions button {{
+      min-height: 40px;
+      padding: 9px 14px;
+      border: 0;
+      border-radius: 999px;
+      background: #13202a;
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    .benchmark-summary {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: .9rem;
+    }}
     code {{
       font-family: "SFMono-Regular", "Menlo", monospace;
       font-size: .84rem;
@@ -423,6 +448,11 @@ async def dashboard(request: Request) -> HTMLResponse:
           </div>
           <pre class="debug-result" id="search-debug-result" aria-live="polite"></pre>
         </form>
+        <div class="benchmark-actions">
+          <button type="button" id="search-benchmark-run">Run Synthetic Benchmark</button>
+          <div class="benchmark-summary" id="search-benchmark-summary"></div>
+        </div>
+        <pre class="debug-result" id="search-benchmark-result" aria-live="polite"></pre>
       </article>
     </section>
   </main>
@@ -478,6 +508,23 @@ async def dashboard(request: Request) -> HTMLResponse:
         searchDebugResult.textContent = JSON.stringify(payload.meta, null, 2);
       }} catch (error) {{
         searchDebugResult.textContent = `error: ${{error.message}}`;
+      }}
+    }});
+
+    const benchmarkRun = document.getElementById("search-benchmark-run");
+    const benchmarkSummary = document.getElementById("search-benchmark-summary");
+    const benchmarkResult = document.getElementById("search-benchmark-result");
+    benchmarkRun?.addEventListener("click", async () => {{
+      benchmarkSummary.textContent = "";
+      benchmarkResult.textContent = "Running benchmark...";
+      try {{
+        const response = await fetch("/search/benchmark");
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        benchmarkSummary.textContent = `passed ${{payload.passed}} / ${{payload.total}}, failed ${{payload.failed}}`;
+        benchmarkResult.textContent = JSON.stringify(payload.cases, null, 2);
+      }} catch (error) {{
+        benchmarkResult.textContent = `error: ${{error.message}}`;
       }}
     }});
   </script>
