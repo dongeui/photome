@@ -54,11 +54,16 @@ updated 2026-04-29 (검색 강화 Round 1~3 완료)
 - **FTS 누락 경고**: 프로세스당 1회 WARNING 로그 (DB 마이그레이션 미실행 감지용).
 - **구조적 검색 로그**: `logger.debug`로 쿼리·채널별 결과 수 기록.
 - **TagVocabularyCache.invalidate() classmethod**: 세션 인스턴스 없이 호출 가능하도록 수정.
+- **Fuzzy Korean correction**: 0결과 시 DB 태그 bigram Jaccard(≥0.5)로 토큰 교정 후 재검색. 하드코딩 없음.
+- **CLIP weight 재분배**: clip_results가 비면 clip 가중치를 shadow로 이동 — CLIP 미설치/임베딩 미생성 상황 자동 대응.
+- **SearchEvent 테이블**: 모든 검색 쿼리·모드·의도·결과수·fallback 경로 기록. 미래 자동 가중치 튜닝 데이터 축적.
+- **결과 다양성 cap**: 동일 날짜 최대 5장 제한 — 같은 이벤트가 결과 상단 독점 방지.
+- **FAISS fetch_k 동적 조정**: 날짜 범위 폭에 따라 fetch multiplier를 2~20배 자동 산정.
 
 ## 현재 작업
 
 - active branch는 `main`이다.
-- 검색 강화 라운드 1~3 완료. 다음은 커밋 + 남은 작업 정리.
+- 검색 강화 전 사이클 완료 (Batch 1-A~D + Round 2/3). 모두 커밋·푸시됨.
 - 로컬 서버는 `http://127.0.0.1:8000/gallery`와 `http://127.0.0.1:8000/dashboard`에서 확인 가능하다.
 - 서버 실행 설정은 Phase 1 polling off, Phase 2 semantic scheduler on, CLIP off, face analysis off다.
 
