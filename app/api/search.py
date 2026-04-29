@@ -7,14 +7,15 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
 from app.api.deps import require_state
-from app.models.semantic import SearchFeedback, SearchWeightProfile
+from app.models.semantic import SearchDocument, SearchFeedback, SearchWeightProfile
 from app.services.search import HybridSearchService
 from app.services.search.backend import SqlAlchemyHybridSearchBackend
 from app.services.search.benchmark import run_benchmark_suite
-from app.services.search.hybrid import intent_weights
+from app.services.search.hybrid import clear_query_cache, intent_weights
+from app.services.search.vector import invalidate_global_vector_index
 
 
 router = APIRouter(tags=["search"])
@@ -359,3 +360,122 @@ def list_default_weights(request: Request) -> list[WeightProfileResponse]:  # no
         )
         for intent, reason in combos
     ]
+
+
+# ---------------------------------------------------------------------------
+# Index rebuild + health
+# ---------------------------------------------------------------------------
+
+@router.post("/search/index/rebuild", status_code=200)
+def rebuild_search_index(request: Request) -> dict[str, Any]:
+    """Rebuild FTS indexes and invalidate the vector index.
+
+    Drops and recreates both FTS virtual tables, then flushes the in-memory
+    query cache and marks the FAISS singleton for rebuild on next search.
+    Use this after bulk imports or when index state is suspect.
+
+    Note: this does NOT re-run semantic maintenance — use
+    POST /scan/semantic-maintenance to re-derive missing search_documents.
+    """
+    database = require_state(request, "database")
+    fts_rebuilt = False
+    fts_ko_rebuilt = False
+
+    with database.session_factory() as session:
+        conn = session.connection()
+        if conn.dialect.name == "sqlite":
+            try:
+                conn.execute(text("DROP TABLE IF EXISTS search_documents_fts"))
+                conn.execute(text(
+                    "CREATE VIRTUAL TABLE search_documents_fts "
+                    "USING fts5(file_id UNINDEXED, search_text, keyword_text, semantic_text, tokenize='unicode61')"
+                ))
+                # Re-populate from search_documents
+                conn.execute(text(
+                    "INSERT INTO search_documents_fts(file_id, search_text, keyword_text, semantic_text) "
+                    "SELECT file_id, search_text, keyword_text, semantic_text FROM search_documents"
+                ))
+                fts_rebuilt = True
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"FTS rebuild failed: {exc}") from exc
+
+            try:
+                conn.execute(text("DROP TABLE IF EXISTS search_documents_fts_ko"))
+                conn.execute(text(
+                    "CREATE VIRTUAL TABLE search_documents_fts_ko "
+                    "USING fts5(file_id UNINDEXED, search_text, keyword_text, semantic_text, tokenize='trigram')"
+                ))
+                conn.execute(text(
+                    "INSERT INTO search_documents_fts_ko(file_id, search_text, keyword_text, semantic_text) "
+                    "SELECT file_id, search_text, keyword_text, semantic_text FROM search_documents"
+                ))
+                fts_ko_rebuilt = True
+            except Exception:
+                pass  # trigram unavailable on older SQLite — not an error
+
+        session.commit()
+
+    cache_cleared = clear_query_cache()
+    vector_invalidated = invalidate_global_vector_index()
+
+    return {
+        "fts_rebuilt": fts_rebuilt,
+        "fts_ko_rebuilt": fts_ko_rebuilt,
+        "query_cache_cleared": cache_cleared,
+        "vector_index_invalidated": vector_invalidated,
+    }
+
+
+@router.get("/search/index/status")
+def search_index_status(request: Request) -> dict[str, Any]:
+    """Return health and size metrics for all search index layers.
+
+    Reports:
+    - search_documents count
+    - FTS row counts (unicode61 + trigram tables)
+    - whether FAISS vector index is loaded
+    - approximate vector count from media_embeddings
+    """
+    from app.models.semantic import MediaEmbedding
+    from app.services.search.vector import _global_faiss_index
+
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        doc_count = session.scalar(select(func.count()).select_from(SearchDocument)) or 0
+        embedding_count = session.scalar(select(func.count()).select_from(MediaEmbedding)) or 0
+
+        fts_count: int | None = None
+        fts_ko_count: int | None = None
+        conn = session.connection()
+        if conn.dialect.name == "sqlite":
+            try:
+                fts_count = conn.execute(
+                    text("SELECT COUNT(*) FROM search_documents_fts")
+                ).scalar()
+            except Exception:
+                pass
+            try:
+                fts_ko_count = conn.execute(
+                    text("SELECT COUNT(*) FROM search_documents_fts_ko")
+                ).scalar()
+            except Exception:
+                pass
+
+    faiss_loaded = _global_faiss_index is not None and _global_faiss_index._index is not None
+    faiss_ntotal: int | None = None
+    if faiss_loaded and _global_faiss_index is not None:
+        faiss_ntotal = getattr(_global_faiss_index._index, "ntotal", None)
+
+    return {
+        "search_documents": doc_count,
+        "embeddings": embedding_count,
+        "fts": {
+            "unicode61_rows": fts_count,
+            "trigram_rows": fts_ko_count,
+        },
+        "vector_index": {
+            "backend": "faiss" if _global_faiss_index is not None else "numpy",
+            "loaded": faiss_loaded,
+            "ntotal": faiss_ntotal,
+        },
+    }
