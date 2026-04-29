@@ -19,6 +19,22 @@ from app.services.embedding import clip as clip_embedding
 
 logger = logging.getLogger(__name__)
 
+# Process-level FAISS index instance (shared across requests).
+# Set by build_vector_index() when FAISS is active so that
+# pipeline can call invalidate_global_vector_index() after maintenance.
+_global_faiss_index: "FaissVectorIndex | None" = None
+
+
+def invalidate_global_vector_index() -> bool:
+    """Invalidate the process-level FAISS index so it rebuilds on next search.
+
+    Returns True if an index was invalidated, False if FAISS is not active.
+    """
+    if _global_faiss_index is not None:
+        _global_faiss_index.invalidate()
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class VectorSearchHit:
@@ -287,12 +303,23 @@ def build_vector_index(session: Session, *, embeddings_root: Path, backend: str 
     backend='auto': use FaissVectorIndex if faiss is installed, else LocalNumpyVectorIndex
     backend='faiss': always try FaissVectorIndex (logs warning if faiss missing)
     backend='numpy': always use LocalNumpyVectorIndex
+
+    When FAISS is selected the instance is stored as a process-level singleton
+    so that invalidate_global_vector_index() can trigger a rebuild after
+    semantic maintenance without needing a direct reference.
     """
+    global _global_faiss_index
+
     if backend == "numpy":
         return LocalNumpyVectorIndex(session, embeddings_root=embeddings_root)
     try:
         import faiss  # noqa: F401
-        return FaissVectorIndex(session, embeddings_root=embeddings_root)
+        if _global_faiss_index is None:
+            _global_faiss_index = FaissVectorIndex(session, embeddings_root=embeddings_root)
+        else:
+            # Update session reference for the new request context
+            _global_faiss_index._session = session
+        return _global_faiss_index
     except ImportError:
         if backend == "faiss":
             logger.warning("faiss not installed; falling back to LocalNumpyVectorIndex")

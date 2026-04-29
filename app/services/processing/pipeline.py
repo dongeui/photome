@@ -26,6 +26,8 @@ from app.services.analysis import auto_tags, image_signals
 from app.services.caption import CaptionProvider
 from app.services.caption.registry import get_caption_provider
 from app.services.embedding import clip as clip_embedding
+from app.services.search.hybrid import clear_query_cache
+from app.services.search.vector import invalidate_global_vector_index
 from app.services.geocoding import GeocodingProvider, NominatimProvider
 from app.services.geocoding.cached import CachedGeocodingService
 from app.services.fingerprint.service import FingerprintService
@@ -298,6 +300,14 @@ class ProcessingPipeline:
                         failed += 1
 
                 session.commit()
+
+                # Invalidate caches so new content is immediately queryable
+                if succeeded > 0:
+                    cleared = clear_query_cache()
+                    logger.debug("semantic maintenance cleared %d cached queries", cleared)
+                    if invalidate_global_vector_index():
+                        logger.debug("semantic maintenance invalidated FAISS index")
+
                 return {
                     "skipped": False,
                     "pending": len(pending),

@@ -241,20 +241,49 @@ class SqlAlchemyHybridSearchBackend:
         fts_query = _fts_query(query)
         if not fts_query:
             return []
+
+        fetch = max(1, limit * 4)
+        # Primary FTS (unicode61 — word boundary, reliable for English)
+        rows: list = []
         try:
             rows = self._session.execute(
                 text(
-                    """
-                    SELECT file_id, bm25(search_documents_fts) AS score
-                    FROM search_documents_fts
-                    WHERE search_documents_fts MATCH :query
-                    ORDER BY score ASC
-                    LIMIT :limit
-                    """
+                    "SELECT file_id, bm25(search_documents_fts) AS score "
+                    "FROM search_documents_fts "
+                    "WHERE search_documents_fts MATCH :query "
+                    "ORDER BY score ASC LIMIT :limit"
                 ),
-                {"query": fts_query, "limit": max(1, limit * 4)},
+                {"query": fts_query, "limit": fetch},
             ).all()
         except Exception:
+            pass
+
+        # Trigram FTS (character n-gram — Korean substring search)
+        # Uses raw LIKE-safe query since trigram doesn't support FTS5 prefix syntax
+        trigram_query = query.strip()
+        if trigram_query:
+            try:
+                trigram_rows = self._session.execute(
+                    text(
+                        "SELECT file_id, bm25(search_documents_fts_ko) AS score "
+                        "FROM search_documents_fts_ko "
+                        "WHERE search_documents_fts_ko MATCH :query "
+                        "ORDER BY score ASC LIMIT :limit"
+                    ),
+                    {"query": trigram_query, "limit": fetch},
+                ).all()
+                # Merge: prefer lower (better) BM25 score per file_id
+                existing: dict[str, float] = {str(r[0]): float(r[1] or 0.0) for r in rows}
+                for file_id, score in trigram_rows:
+                    fid = str(file_id)
+                    s = float(score or 0.0)
+                    if fid not in existing or s < existing[fid]:
+                        existing[fid] = s
+                rows = [(fid, score) for fid, score in existing.items()]
+            except Exception:
+                pass  # trigram table may not exist on older SQLite
+
+        if not rows:
             return []
 
         scored_ids: dict[str, float] = {}

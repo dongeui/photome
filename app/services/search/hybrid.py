@@ -46,6 +46,18 @@ def _cache_set(key: str, results: list[dict], meta: dict) -> None:
         del _query_cache[oldest_key]
     _query_cache[key] = (_time.monotonic(), results, meta)
 
+
+def clear_query_cache() -> int:
+    """Invalidate all cached search results.
+
+    Call this after semantic maintenance completes so that newly indexed
+    content is visible to subsequent queries without waiting for TTL expiry.
+    Returns the number of entries cleared.
+    """
+    count = len(_query_cache)
+    _query_cache.clear()
+    return count
+
 FACE_HINTS = {
     "face", "faces", "person", "people", "portrait", "selfie",
     "woman", "women", "female", "girl", "baby", "infant", "toddler", "child", "kid",
@@ -181,6 +193,7 @@ class HybridSearchService:
         debug_candidates = [dict(item) for item in merged] if debug else None
         apply_exact_ocr_boost(cleaned, merged)
         apply_exact_tag_boost(merged)
+        apply_context_filter_boost(merged, plan)
         set_match_explanations(merged)
         merged.sort(key=search_sort_key, reverse=True)
         final = merged[:limit]
@@ -238,23 +251,36 @@ class HybridSearchService:
         date_from: object | None,
         date_to: object | None,
     ) -> list[dict]:
+        # Determine effective place filters:
+        # - explicit caller-provided place_filter takes precedence (single value)
+        # - otherwise use place_terms from the query plan (OR semantics across terms)
+        if place_filter is not None:
+            effective_place_filters: list[str | None] = [place_filter]
+        elif plan.place_terms:
+            # Run one filtered search per place term; merge best-distance per file
+            effective_place_filters = list(plan.place_terms)
+        else:
+            effective_place_filters = [None]
+
         merged: dict[str, dict] = {}
+
         for variant in plan.visual_queries:
             query_bytes = self._backend.encode_text(variant)
-            results = self._backend.search_by_embedding(
-                query_bytes,
-                limit=limit,
-                place_filter=place_filter,
-                date_from=date_from,
-                date_to=date_to,
-            )
-            for rank, result in enumerate(results, start=1):
-                file_id = str(result["file_id"])
-                current = merged.get(file_id)
-                if current is None or float(result.get("distance", 99.0)) < float(current.get("distance", 99.0)):
-                    result["semantic_query"] = variant
-                    result["semantic_variant_rank"] = rank
-                    merged[file_id] = result
+            for pf in effective_place_filters:
+                results = self._backend.search_by_embedding(
+                    query_bytes,
+                    limit=limit,
+                    place_filter=pf,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+                for rank, result in enumerate(results, start=1):
+                    file_id = str(result["file_id"])
+                    current = merged.get(file_id)
+                    if current is None or float(result.get("distance", 99.0)) < float(current.get("distance", 99.0)):
+                        result["semantic_query"] = variant
+                        result["semantic_variant_rank"] = rank
+                        merged[file_id] = result
 
         values = list(merged.values())
         values.sort(key=lambda item: float(item.get("distance", 99.0)))
@@ -403,6 +429,39 @@ def combined_match_reason(hits: set[str]) -> str:
     if "shadow" in hits:
         return "shadow"
     return "analysis"
+
+
+def apply_context_filter_boost(results: list[dict], plan: "QueryPlan") -> None:
+    """Boost results that match place/person terms from the query plan.
+
+    This rewards multi-condition matches (e.g. "제주 + 가족") so they rank
+    above results matching only one condition.
+    """
+    if not plan.place_terms and not plan.person_terms:
+        return
+
+    place_set = {t.casefold() for t in plan.place_terms}
+    person_set = {t.casefold() for t in plan.person_terms}
+
+    for result in results:
+        tags = result.get("tags") or []
+        tag_values = {str(tag.get("value", "")).casefold() for tag in tags}
+        bonus = 0.0
+
+        matched_places = place_set & tag_values
+        if matched_places:
+            bonus += 0.08 * len(matched_places)
+
+        matched_persons = person_set & tag_values
+        if matched_persons:
+            bonus += 0.06 * len(matched_persons)
+
+        if bonus > 0:
+            result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
+            result.setdefault("score_breakdown", []).append(
+                {"stage": "context_filter_bonus", "delta": bonus,
+                 "rank_score": float(result.get("rank_score") or 0.0)}
+            )
 
 
 def apply_exact_ocr_boost(query: str, results: list[dict]) -> None:

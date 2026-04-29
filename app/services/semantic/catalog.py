@@ -255,6 +255,13 @@ class SemanticCatalog:
     def _upsert_search_document_fts(self, row: SearchDocument) -> None:
         if self._session.bind is None or self._session.bind.dialect.name != "sqlite":
             return
+        params = {
+            "file_id": row.file_id,
+            "search_text": row.search_text,
+            "keyword_text": row.keyword_text,
+            "semantic_text": row.semantic_text,
+        }
+        # Primary FTS (unicode61 — word boundary, good for English)
         try:
             self._session.execute(
                 text("DELETE FROM search_documents_fts WHERE file_id = :file_id"),
@@ -262,21 +269,31 @@ class SemanticCatalog:
             )
             self._session.execute(
                 text(
-                    """
-                    INSERT INTO search_documents_fts(file_id, search_text, keyword_text, semantic_text)
-                    VALUES (:file_id, :search_text, :keyword_text, :semantic_text)
-                    """
+                    "INSERT INTO search_documents_fts(file_id, search_text, keyword_text, semantic_text) "
+                    "VALUES (:file_id, :search_text, :keyword_text, :semantic_text)"
                 ),
-                {
-                    "file_id": row.file_id,
-                    "search_text": row.search_text,
-                    "keyword_text": row.keyword_text,
-                    "semantic_text": row.semantic_text,
-                },
+                params,
             )
         except Exception:
             # FTS is an acceleration layer; search_documents remains canonical.
-            return
+            pass
+
+        # Trigram FTS (character n-gram — Korean/CJK substring search)
+        try:
+            self._session.execute(
+                text("DELETE FROM search_documents_fts_ko WHERE file_id = :file_id"),
+                {"file_id": row.file_id},
+            )
+            self._session.execute(
+                text(
+                    "INSERT INTO search_documents_fts_ko(file_id, search_text, keyword_text, semantic_text) "
+                    "VALUES (:file_id, :search_text, :keyword_text, :semantic_text)"
+                ),
+                params,
+            )
+        except Exception:
+            # Trigram FTS is optional; silently skip if table doesn't exist.
+            pass
 
     def _replace_ocr_blocks(self, file_id: str, blocks: Iterable[OCRBlock]) -> None:
         self._session.execute(delete(MediaOCRBlock).where(MediaOCRBlock.file_id == file_id))

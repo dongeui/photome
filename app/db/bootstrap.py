@@ -55,6 +55,7 @@ def _ensure_search_document_fts(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
     with engine.begin() as connection:
+        # Primary FTS — unicode61 (word-boundary, good for English)
         try:
             connection.execute(
                 text(
@@ -72,3 +73,26 @@ def _ensure_search_document_fts(engine: Engine) -> None:
             )
         except Exception as exc:
             logger.warning("search document FTS unavailable", extra={"error": str(exc)})
+
+        # Trigram FTS — character n-gram, better for Korean/CJK substring search.
+        # Requires SQLite 3.34.0+ (2020). Falls back silently if unavailable.
+        try:
+            connection.execute(
+                text(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts_ko
+                    USING fts5(
+                        file_id UNINDEXED,
+                        search_text,
+                        keyword_text,
+                        semantic_text,
+                        tokenize='trigram'
+                    )
+                    """
+                )
+            )
+        except Exception as exc:
+            logger.info(
+                "trigram FTS unavailable (SQLite < 3.34); Korean substring search will use n-gram fallback",
+                extra={"error": str(exc)},
+            )
