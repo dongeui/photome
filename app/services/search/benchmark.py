@@ -88,6 +88,7 @@ def run_benchmark_suite(
         "passed": passed,
         "failed": len(cases) - passed,
         "weight_overrides": weight_overrides or {},
+        "summary": _summary(cases),
         "cases": cases,
     }
 
@@ -172,3 +173,25 @@ def _term_checks(name: str, actual: list[str], expected: tuple[str, ...]) -> lis
 
 def _check(name: str, *, actual, expected, passed: bool) -> dict:
     return {"name": name, "actual": actual, "expected": expected, "passed": passed}
+
+
+def _summary(cases: list[dict]) -> dict:
+    failed_checks: dict[str, int] = {}
+    effective_modes: dict[str, int] = {}
+    intents: dict[str, int] = {}
+    for case in cases:
+        meta = case.get("meta", {})
+        query_plan = meta.get("query_plan", {})
+        effective_mode = str(meta.get("effective_mode") or "unknown")
+        intent = str(query_plan.get("intent") or "unknown")
+        effective_modes[effective_mode] = effective_modes.get(effective_mode, 0) + 1
+        intents[intent] = intents.get(intent, 0) + 1
+        for check in case.get("checks", []):
+            if not check.get("passed"):
+                name = str(check.get("name") or "unknown")
+                failed_checks[name] = failed_checks.get(name, 0) + 1
+    return {
+        "effective_modes": effective_modes,
+        "intents": intents,
+        "failed_checks": failed_checks,
+    }

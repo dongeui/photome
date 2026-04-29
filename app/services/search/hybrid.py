@@ -123,15 +123,33 @@ class HybridSearchService:
             "weight_overrides": weight_overrides or {},
         }
         if debug:
+            fused_for_debug = debug_candidates or merged
             meta["debug"] = {
                 "requested_mode": normalized_mode,
                 "weights": weights,
+                "applied_filters": {
+                    "place_filter": place_filter,
+                    "date_from": _isoformat_or_none(date_from),
+                    "date_to": _isoformat_or_none(date_to),
+                    "planner_place_terms": plan.place_terms,
+                    "planner_person_terms": plan.person_terms,
+                    "planner_ocr_terms": plan.ocr_terms,
+                    "planner_visual_terms": plan.visual_terms,
+                },
+                "channel_stats": {
+                    "ocr": len(ocr_results),
+                    "clip": len(clip_results),
+                    "shadow": len(shadow_results),
+                    "fused": len(fused_for_debug),
+                    "final": len(final),
+                },
+                "channel_overlap": _channel_overlap(fused_for_debug),
                 "channels": {
                     "ocr": _preview_results(ocr_results),
                     "clip": _preview_results(clip_results),
                     "shadow": _preview_results(shadow_results),
                 },
-                "fused": _preview_results(debug_candidates or merged),
+                "fused": _preview_results(fused_for_debug),
                 "final": _preview_results(final),
             }
         if not final and hasattr(self._backend, "suggest_related_tags"):
@@ -412,3 +430,45 @@ def _preview_results(results: list[dict], *, limit: int = 8) -> list[dict]:
             }
         )
     return preview
+
+
+def _channel_overlap(results: list[dict]) -> dict[str, int]:
+    overlap = {
+        "ocr_only": 0,
+        "clip_only": 0,
+        "shadow_only": 0,
+        "ocr_clip": 0,
+        "ocr_shadow": 0,
+        "clip_shadow": 0,
+        "all_three": 0,
+    }
+    for item in results:
+        hits = {
+            channel
+            for channel in ("ocr", "clip", "shadow")
+            if item.get(f"rrf_{channel}") not in (None, 0, 0.0)
+        }
+        if hits == {"ocr"}:
+            overlap["ocr_only"] += 1
+        elif hits == {"clip"}:
+            overlap["clip_only"] += 1
+        elif hits == {"shadow"}:
+            overlap["shadow_only"] += 1
+        elif hits == {"ocr", "clip"}:
+            overlap["ocr_clip"] += 1
+        elif hits == {"ocr", "shadow"}:
+            overlap["ocr_shadow"] += 1
+        elif hits == {"clip", "shadow"}:
+            overlap["clip_shadow"] += 1
+        elif hits == {"ocr", "clip", "shadow"}:
+            overlap["all_three"] += 1
+    return overlap
+
+
+def _isoformat_or_none(value: object | None) -> str | None:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return isoformat()
+    return str(value)

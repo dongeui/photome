@@ -53,6 +53,8 @@ Inspect query planning and ranking channels:
 GET /search/debug?q=작년 여름 바다에서 가족이랑 찍은 사진
 ```
 
+`/search/debug` returns applied filters, channel counts, and channel overlap so weight changes can be tuned against actual fusion behavior.
+
 Override channel weights while tuning:
 
 ```

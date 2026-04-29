@@ -540,8 +540,14 @@ async def dashboard(request: Request) -> HTMLResponse:
         const overrideText = Object.keys(payload.weight_overrides || {{}}).length
           ? `, overrides ${{JSON.stringify(payload.weight_overrides)}}`
           : "";
-        benchmarkSummary.textContent = `passed ${{payload.passed}} / ${{payload.total}}, failed ${{payload.failed}}${{overrideText}}`;
-        benchmarkResult.textContent = JSON.stringify(payload.cases, null, 2);
+        const failedChecks = Object.keys(payload.summary?.failed_checks || {{}}).length
+          ? `, failed checks ${{JSON.stringify(payload.summary.failed_checks)}}`
+          : "";
+        benchmarkSummary.textContent = `passed ${{payload.passed}} / ${{payload.total}}, failed ${{payload.failed}}${{overrideText}}${{failedChecks}}`;
+        benchmarkResult.textContent = JSON.stringify({{
+          summary: payload.summary,
+          cases: payload.cases,
+        }}, null, 2);
       }} catch (error) {{
         benchmarkResult.textContent = `error: ${{error.message}}`;
       }}
