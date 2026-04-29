@@ -206,6 +206,7 @@ class SemanticCatalog:
         ]
         search_text = _join_text([*keyword_parts, *semantic_parts])
         source_updated_at = _max_datetime(
+            media_file.updated_at,
             annotation.updated_at if annotation else None,
             ocr.updated_at if ocr else None,
             analysis.updated_at if analysis else None,

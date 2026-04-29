@@ -15,6 +15,8 @@ from app.services.analysis import FaceAnalysisConfig, FaceAnalysisService
 from app.services.fingerprint.service import FingerprintConfig, FingerprintService
 from app.services.metadata.service import MetadataService
 from app.services.processing.pipeline import ProcessingPipeline
+from app.services.search.hybrid import clear_query_cache
+from app.services.search.vector import invalidate_global_vector_index
 from app.services.scanner.service import ScannerConfig, ScannerService
 from app.services.thumbnail.service import ThumbnailConfig, ThumbnailService
 from app.services.video.service import VideoKeyframeConfig, VideoKeyframeService
@@ -28,6 +30,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: AppSettings = getattr(app.state, "settings", None) or load_settings()
     configure_logging(settings.log_level)
+    clear_query_cache()
+    invalidate_global_vector_index()
     database = build_database_state(settings)
     scanner = ScannerService(
         ScannerConfig(
