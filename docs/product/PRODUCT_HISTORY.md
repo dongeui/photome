@@ -1,5 +1,5 @@
 # Product History
-updated 2026-04-29 (세션 2)
+updated 2026-04-29 (세션 3)
 
 ## 2026-04-22
 
@@ -110,3 +110,34 @@ updated 2026-04-29 (세션 2)
 `app/api/`: search.py, people.py (신규), router.py  
 `app/db/`: bootstrap.py  
 `pyproject.toml`
+
+## 2026-04-29 (세션 3) — 버그 수정 + R3/R4 기능 추가
+
+### P0/P1 버그 수정
+- `hybrid.py`: `result.get("signals").get("face_count")` → `result.get("face_count")` (signals 키 존재 안 함)
+- `hybrid.py`: `result.get("exif_datetime")` → `result.get("captured_at")` (_result_dict 실제 키명과 불일치)
+- `backend.py`: FTS `rows` 타입 혼재 — `list[tuple[str, float]]`로 초기화부터 명시적 타입 강제
+- `hybrid.py`: 사용되지 않는 `as_completed` 임포트 제거
+
+### R3 — 유저 피드백 신호 + 재랭커 인터페이스
+- `models/semantic.py`: `SearchFeedback` 테이블 추가 (file_id, action, query_hint, tag_correction)
+  - action: `hide` | `promote` | `correct_tag`
+  - query_hint: 비어있으면 전역, 값 있으면 해당 쿼리에 한정
+- `api/search.py`: 피드백 API 추가
+  - `POST /search/feedback`: 피드백 기록
+  - `GET /search/feedback`: 피드백 목록 (action 필터 가능)
+  - `DELETE /search/feedback/{id}`: 피드백 제거 (hide/promote 취소)
+- `backend.py`: `load_feedback_sets()` — DB에서 (hidden_ids, promoted_ids) 로드
+- `hybrid.py`: `search_with_meta()`에서 hidden 파일 스코어링 전 제거, promoted 파일에 +0.15 부스트
+- `hybrid.py`: `RerankerProtocol` + `PassThroughReranker` 추가 — 플러그인 방식 재랭커 인터페이스
+  - `HybridSearchService(backend, reranker=...)` 형태로 커스텀 재랭커 주입 가능
+
+### R4 — 인덱스 재빌드 CLI + 헬스 페이지
+- `api/search.py`: 인덱스 관리 API 추가
+  - `POST /search/index/rebuild`: FTS 테이블(unicode61 + trigram) DROP → CREATE → 재적재, 쿼리 캐시 초기화, FAISS 싱글턴 무효화
+  - `GET /search/index/status`: search_documents 수, FTS 로우 수, embedding 수, FAISS 로드 상태/ntotal 반환
+
+### 변경된 파일 목록
+`app/services/search/`: hybrid.py, backend.py  
+`app/models/`: semantic.py, __init__.py  
+`app/api/`: search.py
