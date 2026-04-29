@@ -206,13 +206,12 @@ class SemanticCatalog:
         ]
         search_text = _join_text([*keyword_parts, *semantic_parts])
         source_updated_at = _max_datetime(
-            media_file.updated_at,
             annotation.updated_at if annotation else None,
             ocr.updated_at if ocr else None,
             analysis.updated_at if analysis else None,
             caption.updated_at if caption else None,
             *(embedding.updated_at for embedding in embeddings),
-        )
+        ) or media_file.updated_at  # canonical fallback: always deterministic
 
         keyword_text = _join_text(keyword_parts)
         semantic_text = _join_text(semantic_parts)
@@ -400,8 +399,13 @@ def _signal_terms(signals: dict) -> list[str]:
     return terms
 
 
-def _max_datetime(*values: datetime | None) -> datetime:
+def _max_datetime(*values: datetime | None) -> datetime | None:
+    """Return the latest datetime among non-None values, or None if all are None.
+
+    Previously returned datetime.utcnow() as a fallback, which caused
+    source_updated_at to change on every run for files with no timestamps —
+    making the staleness check unreliable.
+    Callers handle None by using MediaFile.updated_at as the canonical fallback.
+    """
     available = [value for value in values if value is not None]
-    if not available:
-        return datetime.utcnow()
-    return max(available)
+    return max(available) if available else None
