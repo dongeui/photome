@@ -30,14 +30,7 @@ from app.services.search.vocab import TagVocabularyCache
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
 from app.services.search.vector import build_vector_index, VectorIndexBackend
-
-FACE_HINTS = {
-    "face", "faces", "person", "people", "portrait", "selfie",
-    "woman", "women", "female", "girl", "baby", "infant", "toddler", "child", "kid",
-    "얼굴", "사람", "인물", "셀카", "남자", "여자", "여성", "아기", "애기", "아이", "어린이",
-    "엄마", "아빠", "가족", "친구", "커플",
-}
-TEXT_HINTS = {"text", "ocr", "document", "receipt", "screen", "텍스트", "글씨", "문서", "영수증", "화면", "스크린샷"}
+from app.services.search.hybrid import FACE_HINTS, TEXT_HINTS
 
 # Korean ↔ English tag synonyms: searching either side will also match the other
 TAG_SYNONYMS: dict[str, set[str]] = {
@@ -453,7 +446,13 @@ class SqlAlchemyHybridSearchBackend:
 
     def _hinted_shadow_results(self, query: str, *, limit: int, exclude_file_ids: set[str] | None = None) -> list[dict]:
         lowered = query.casefold().strip()
-        wants_faces = any(hint in lowered for hint in FACE_HINTS)
+        tokens = set(lowered.split())
+        # Extend face detection with DB person tags so user-named people trigger it
+        try:
+            person_tags = self._tag_vocab_cache.get().person_tags
+        except Exception:
+            person_tags = frozenset()
+        wants_faces = any(hint in lowered for hint in FACE_HINTS) or bool(tokens & person_tags)
         wants_text = any(hint in lowered for hint in TEXT_HINTS)
         if not wants_faces and not wants_text:
             return []

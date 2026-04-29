@@ -230,7 +230,7 @@ class HybridSearchService:
         # OCR must run first — its results drive effective_mode resolution
         ocr_results = self._backend.search_by_ocr(keyword_query, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
         effective_mode, intent_reason = resolve_effective_mode(
-            cleaned, normalized_mode, ocr_results, planner_intent=plan.intent
+            cleaned, normalized_mode, ocr_results, planner_intent=plan.intent, tag_vocab=tag_vocab
         )
 
         # Shadow and CLIP are independent → run in parallel
@@ -559,15 +559,23 @@ def resolve_effective_mode(
     ocr_results: list[dict],
     *,
     planner_intent: str | None = None,
+    tag_vocab=None,
 ) -> tuple[str, str]:
     if requested_mode != "hybrid":
         return requested_mode, "manual"
 
     lowered = query.casefold()
-    has_face_hint = any(hint in lowered for hint in FACE_HINTS)
+    tokens = set(lowered.split())
+
+    # Extend seed hint sets with actual DB-sourced tag vocabulary so user-created
+    # tags (e.g. specific person names or place names) trigger the right mode.
+    person_tags: frozenset[str] = tag_vocab.person_tags if tag_vocab is not None else frozenset()
+    place_tags: frozenset[str] = tag_vocab.place_tags if tag_vocab is not None else frozenset()
+
+    has_face_hint = any(hint in lowered for hint in FACE_HINTS) or bool(tokens & person_tags)
     has_text_hint = any(hint in lowered for hint in TEXT_HINTS)
     has_screen_hint = any(hint in lowered for hint in SCREEN_HINTS)
-    has_travel_hint = any(hint in lowered for hint in TRAVEL_HINTS)
+    has_travel_hint = any(hint in lowered for hint in TRAVEL_HINTS) or bool(tokens & place_tags)
     has_celebration_hint = any(hint in lowered for hint in CELEBRATION_HINTS)
     word_hits = [result for result in ocr_results if result.get("ocr_match_kind") == "word"]
     phrase_hits = [result for result in ocr_results if result.get("ocr_match_kind") == "phrase"]
