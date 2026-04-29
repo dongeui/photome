@@ -11,6 +11,7 @@ from app.models.person import Person
 from app.models.semantic import (
     MediaAnalysisSignal,
     MediaAutoTagState,
+    MediaCaption,
     MediaEmbedding,
     MediaOCR,
     MediaOCRBlock,
@@ -26,6 +27,7 @@ __all__ = [
     "MediaAnalysisSignal",
     "MediaAnnotation",
     "MediaAutoTagState",
+    "MediaCaption",
     "MediaEmbedding",
     "MediaFile",
     "MediaOCR",

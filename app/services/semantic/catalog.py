@@ -18,6 +18,7 @@ from app.models.media import MediaFile
 from app.models.semantic import (
     MediaAnalysisSignal,
     MediaAutoTagState,
+    MediaCaption,
     MediaEmbedding,
     MediaOCR,
     MediaOCRBlock,
@@ -25,6 +26,7 @@ from app.models.semantic import (
     SearchDocument,
 )
 from app.models.tag import Tag
+from app.services.caption import CaptionResult
 from app.services.ocr import OCRBlock, OCRResult
 
 
@@ -102,6 +104,31 @@ class SemanticCatalog:
         self._session.flush()
         return row
 
+    def upsert_caption(
+        self,
+        file_id: str,
+        result: CaptionResult,
+        *,
+        version: str = "caption-v1",
+    ) -> MediaCaption:
+        row = self._session.get(MediaCaption, file_id)
+        values = {
+            "short_caption": result.short_caption,
+            "objects_json": result.objects,
+            "activities_json": result.activities,
+            "setting": result.setting,
+            "provider": result.provider,
+            "version": version,
+        }
+        if row is None:
+            row = MediaCaption(file_id=file_id, **values)
+            self._session.add(row)
+        else:
+            for key, value in values.items():
+                setattr(row, key, value)
+        self._session.flush()
+        return row
+
     def upsert_auto_tag_state(
         self,
         file_id: str,
@@ -126,6 +153,7 @@ class SemanticCatalog:
         annotation = self._session.get(MediaAnnotation, media_file.file_id)
         ocr = self._session.get(MediaOCR, media_file.file_id)
         analysis = self._session.get(MediaAnalysisSignal, media_file.file_id)
+        caption = self._session.get(MediaCaption, media_file.file_id)
         tags = list(
             self._session.scalars(
                 select(Tag)
@@ -164,12 +192,14 @@ class SemanticCatalog:
             ocr.text_content if ocr else None,
             *[tag.tag_value for tag in tags],
         ]
+        caption_parts = _caption_terms(caption)
         semantic_parts = [
             media_file.filename,
             annotation.title if annotation else None,
             annotation.description if annotation else None,
             *[tag.tag_value for tag in tags],
             *_signal_terms(signals),
+            *caption_parts,
         ]
         search_text = _join_text([*keyword_parts, *semantic_parts])
         source_updated_at = _max_datetime(
@@ -177,6 +207,7 @@ class SemanticCatalog:
             annotation.updated_at if annotation else None,
             ocr.updated_at if ocr else None,
             analysis.updated_at if analysis else None,
+            caption.updated_at if caption else None,
             *(embedding.updated_at for embedding in embeddings),
         )
 
@@ -283,6 +314,19 @@ def _analysis_payload(analysis: MediaAnalysisSignal | None, *, face_count: int) 
         "is_screenshot_like": analysis.is_screenshot_like,
         "face_count": face_count,
     }
+
+
+def _caption_terms(caption: MediaCaption | None) -> list[str]:
+    if caption is None:
+        return []
+    terms: list[str] = []
+    if caption.short_caption:
+        terms.append(caption.short_caption)
+    terms.extend(caption.objects_json or [])
+    terms.extend(caption.activities_json or [])
+    if caption.setting:
+        terms.append(caption.setting)
+    return terms
 
 
 def _signal_terms(signals: dict) -> list[str]:

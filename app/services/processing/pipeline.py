@@ -23,6 +23,8 @@ from app.models.person import Person
 from app.models.tag import Tag
 from app.services.analysis import FaceAnalysisError, FaceAnalysisService
 from app.services.analysis import auto_tags, image_signals
+from app.services.caption import CaptionProvider
+from app.services.caption.registry import get_caption_provider
 from app.services.embedding import clip as clip_embedding
 from app.services.fingerprint.service import FingerprintService
 from app.services.metadata.service import MetadataService
@@ -89,6 +91,8 @@ class ProcessingPipeline:
         semantic_embedding_version: str = "embedding-v1",
         semantic_auto_tag_version: str = "auto-v1",
         semantic_search_version: str = "search-v1",
+        semantic_caption_version: str = "caption-v1",
+        caption_provider: CaptionProvider | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._scanner = scanner
@@ -107,6 +111,8 @@ class ProcessingPipeline:
         self._semantic_embedding_version = semantic_embedding_version
         self._semantic_auto_tag_version = semantic_auto_tag_version
         self._semantic_search_version = semantic_search_version
+        self._semantic_caption_version = semantic_caption_version
+        self._caption_provider: CaptionProvider | None = caption_provider if caption_provider is not None else get_caption_provider()
         self._semantic_maintenance_lock = Lock()
 
     def submit_scan_job(
@@ -499,6 +505,22 @@ class ProcessingPipeline:
                     embedding_result["embedding_ref"],
                     self._embeddings_root,
                 )
+
+        if self._caption_provider is not None:
+            caption_result = self._caption_provider.caption(source_path)
+            if caption_result is not None:
+                semantic_catalog.upsert_caption(
+                    media_file.file_id,
+                    caption_result,
+                    version=self._semantic_caption_version,
+                )
+                result["caption"] = {
+                    "short_caption": caption_result.short_caption,
+                    "objects": caption_result.objects,
+                    "activities": caption_result.activities,
+                    "setting": caption_result.setting,
+                    "provider": caption_result.provider,
+                }
 
         generated_tags = auto_tags.merge_auto_tags(signal_tags, embedding_tags)
         semantic_catalog.upsert_auto_tag_state(

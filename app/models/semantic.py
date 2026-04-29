@@ -90,6 +90,29 @@ class MediaAutoTagState(Base):
     media_file = relationship("MediaFile")
 
 
+class MediaCaption(Base):
+    """VLM-generated caption for a media file.
+
+    Stored separately from SearchDocument so it can be versioned and
+    re-generated independently of other semantic signals.
+    """
+
+    __tablename__ = "media_captions"
+
+    file_id: Mapped[str] = mapped_column(ForeignKey("media_files.file_id", ondelete="CASCADE"), primary_key=True)
+    short_caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    objects_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    activities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    setting: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    version: Mapped[str] = mapped_column(String(64), nullable=False, default="caption-v1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    media_file = relationship("MediaFile")
+
+
 class SearchDocument(Base):
     __tablename__ = "search_documents"
 
