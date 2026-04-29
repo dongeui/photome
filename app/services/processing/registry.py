@@ -73,19 +73,30 @@ class MediaCatalog:
             select(ScanObservation).where(ScanObservation.current_path == str(scan_record.path))
         ).scalar_one_or_none()
         ready = False
+        is_stable = self._is_scan_record_stable(
+            scan_record,
+            now=now,
+            stability_window_seconds=stability_window_seconds,
+        )
 
         if observation is None:
+            stable_after_at = now + self._stability_window(stability_window_seconds)
+            status = "waiting_stable"
+            if is_stable:
+                stable_after_at = now
+                status = "ready"
+                ready = True
             observation = ScanObservation(
                 source_root=str(scan_record.source_root),
                 current_path=str(scan_record.path),
                 relative_path=str(scan_record.relative_path),
                 media_kind=scan_record.media_kind.value,
-                status="waiting_stable",
+                status=status,
                 size_bytes=scan_record.size_bytes,
                 mtime_ns=scan_record.mtime_ns,
                 first_seen_at=now,
                 last_seen_at=now,
-                stable_after_at=now + self._stability_window(stability_window_seconds),
+                stable_after_at=stable_after_at,
                 error_stage=None,
                 error_message=None,
                 error_count=0,
@@ -108,10 +119,11 @@ class MediaCatalog:
             observation.last_seen_at = now
             observation.updated_at = now
             if changed or observation.status == "error":
-                observation.stable_after_at = now + self._stability_window(stability_window_seconds)
-                observation.status = "waiting_stable"
+                observation.stable_after_at = now if is_stable else now + self._stability_window(stability_window_seconds)
+                observation.status = "ready" if is_stable else "waiting_stable"
                 observation.error_stage = None
                 observation.error_message = None
+                ready = is_stable
             elif observation.status == "waiting_stable" and observation.stable_after_at is not None and now >= observation.stable_after_at:
                 observation.status = "ready"
                 observation.error_stage = None
@@ -451,6 +463,18 @@ class MediaCatalog:
     @staticmethod
     def _stability_window(seconds: int):
         return timedelta(seconds=max(0, seconds))
+
+    def _is_scan_record_stable(
+        self,
+        scan_record: FileScanRecord,
+        *,
+        now: datetime,
+        stability_window_seconds: int,
+    ) -> bool:
+        if stability_window_seconds <= 0:
+            return True
+        mtime_at = datetime.fromtimestamp(scan_record.mtime_ns / 1_000_000_000, tz=timezone.utc).replace(tzinfo=None)
+        return now - mtime_at >= self._stability_window(stability_window_seconds)
 
     def get_media(self, file_id: str) -> MediaFile | None:
         return self._session.get(MediaFile, file_id)

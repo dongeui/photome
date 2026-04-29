@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Iterator
@@ -262,6 +263,29 @@ def test_async_scan_starts_job_and_exposes_status(client: TestClient, tmp_path: 
     assert status_job["job_id"] == job["job_id"]
     assert status_job["status"] == "succeeded"
     assert status_job["result"]["summary"]["created"] == 1
+
+
+def test_full_scan_imports_old_archive_files_on_first_pass(client: TestClient, tmp_path: Path) -> None:
+    nested_root = tmp_path / "archive-source"
+    nested_file = nested_root / "album-a" / "album-b" / "archive-receipt.jpg"
+    nested_file.parent.mkdir(parents=True, exist_ok=True)
+    create_image(nested_file)
+    old_timestamp = time.time() - 600
+    os.utime(nested_file, (old_timestamp, old_timestamp))
+
+    response = client.post(
+        "/scan",
+        params={"full_scan": "true", "source_roots": str(nested_root)},
+    )
+
+    assert response.status_code == 200
+    summary = response.json()["job"]["result"]["summary"]
+    assert summary["scanned"] == 1
+    assert summary["created"] == 1
+
+    search = client.get("/search", params={"q": "archive"})
+    assert search.status_code == 200
+    assert search.json()["total"] == 1
 
 
 def test_async_semantic_maintenance_job_exposes_status(client: TestClient, source_root: Path) -> None:
