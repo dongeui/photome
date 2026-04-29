@@ -167,7 +167,15 @@ class HybridSearchService:
                 meta["cache_hit"] = True
                 return results, meta
 
-        plan = plan_query(query)
+        # Load tag vocabulary from DB (TTL-cached) so planner recognises
+        # user-created tags like "여수밤바다" without any hardcoded dictionary.
+        tag_vocab = None
+        if hasattr(self._backend, "get_tag_vocabulary"):
+            try:
+                tag_vocab = self._backend.get_tag_vocabulary()
+            except Exception:
+                pass
+        plan = plan_query(query, tag_vocab=tag_vocab)
         cleaned = plan.normalized_query
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
 

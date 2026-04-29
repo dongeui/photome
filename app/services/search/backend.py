@@ -16,6 +16,7 @@ from app.models.face import Face
 from app.models.media import MediaFile
 from app.models.person import Person
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchFeedback, SearchWeightProfile
+from app.services.search.vocab import TagVocabularyCache
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
 from app.services.search.vector import build_vector_index, VectorIndexBackend
@@ -83,6 +84,11 @@ class SqlAlchemyHybridSearchBackend:
         self._vector_index = vector_index or build_vector_index(
             session, embeddings_root=embeddings_root, backend=_backend_setting
         )
+        self._tag_vocab_cache = TagVocabularyCache(session)
+
+    def get_tag_vocabulary(self):
+        """Return current TagVocabulary snapshot (TTL-cached, from DB)."""
+        return self._tag_vocab_cache.get()
 
     def load_persisted_weights(self, intent: str, reason: str) -> dict[str, float] | None:
         """Return persisted weights for intent+reason, or None if not customised."""

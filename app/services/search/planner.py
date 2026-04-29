@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import re
+from typing import TYPE_CHECKING
 
 from app.services.search import query_translate
+
+if TYPE_CHECKING:
+    from app.services.search.vocab import TagVocabulary
 
 
 PERSON_TERMS = {
@@ -115,12 +119,21 @@ class QueryPlan:
         }
 
 
-def plan_query(query: str) -> QueryPlan:
+def plan_query(query: str, *, tag_vocab: "TagVocabulary | None" = None) -> QueryPlan:
+    """Parse a natural-language query into a structured QueryPlan.
+
+    tag_vocab: optional TagVocabulary loaded from the user's DB.  When provided,
+    place/person matching is extended with every tag the user has ever created —
+    so long-tail names like "여수밤바다" or "에버랜드" are recognised without
+    any hardcoded dictionary entry.
+    """
     normalized = query_translate.normalize_query(query)
     tokens = _tokens(normalized)
     date_from, date_to = query_translate.extract_date_range(normalized)
-    person_terms = _matching_terms(tokens, normalized, PERSON_TERMS)
-    place_terms = _matching_terms(tokens, normalized, PLACE_TERMS)
+    person_terms = _matching_terms_with_vocab(tokens, normalized, PERSON_TERMS,
+                                              tag_vocab.person_tags if tag_vocab else None)
+    place_terms = _matching_terms_with_vocab(tokens, normalized, PLACE_TERMS,
+                                             tag_vocab.place_tags if tag_vocab else None)
     ocr_terms = _matching_terms(tokens, normalized, OCR_TERMS)
     visual_terms = _matching_terms(tokens, normalized, VISUAL_TERMS)
     keyword_tokens = [
@@ -203,31 +216,68 @@ def _split_compound_token(token: str) -> list[str]:
 
 
 def _tokens(query: str) -> list[str]:
-    raw = re.findall(r"[0-9A-Za-z가-힣_]+", query.casefold())
-    tokens: list[str] = []
-    for token in raw:
-        # 한글이 포함된 토큰만 분해 시도 (6자 이상인 경우 — 짧은 건 이미 단어)
-        if re.search(r"[가-힣]", token) and len(token) >= 6:
-            parts = _split_compound_token(token)
-            tokens.extend(parts)
-        else:
-            tokens.append(token)
-    return tokens
+    """Tokenize query into noun-level tokens.
+
+    Uses the morphological tokenizer (KoNLPy Okt/Mecab) when available,
+    falling back to the heuristic compound-token splitter.  Both paths
+    are imported from tokenizer.py so this file has no direct NLP dependency.
+    """
+    from app.services.search.tokenizer import korean_nouns
+    return korean_nouns(query)
 
 
 def _matching_terms(tokens: list[str], normalized: str, terms: set[str]) -> list[str]:
-    lowered = normalized.casefold()
-    hits = set(term for term in terms if term in tokens or term in lowered)
+    return _matching_terms_with_vocab(tokens, normalized, terms, None)
 
-    # Alias expansion: "제주도" → add "제주" if it's in PLACE_TERMS
+
+def _matching_terms_with_vocab(
+    tokens: list[str],
+    normalized: str,
+    static_terms: set[str],
+    dynamic_tags: "frozenset[str] | None",
+) -> list[str]:
+    """Match tokens/normalized query against static_terms + dynamic_tags from DB.
+
+    dynamic_tags (from TagVocabularyCache) extends matching beyond the hardcoded
+    static_terms so that user-created tags like "여수밤바다" or "에버랜드" are
+    automatically detected without any dictionary entry.
+    """
+    lowered = normalized.casefold()
+    hits: set[str] = set()
+
+    # 1. Static vocabulary match (token exact or substring in normalized query)
+    for term in static_terms:
+        if term in tokens or term in lowered:
+            hits.add(term)
+
+    # 2. PLACE_ALIASES expansion for static vocab
     for token in tokens:
         canonical = PLACE_ALIASES.get(token)
-        if canonical and canonical in terms:
+        if canonical and canonical in static_terms:
             hits.add(canonical)
-    # Also check substring aliases in the full normalized query
     for alias, canonical in PLACE_ALIASES.items():
-        if alias in lowered and canonical in terms:
+        if alias in lowered and canonical in static_terms:
             hits.add(canonical)
+
+    # 3. Dynamic tag vocabulary from DB — substring match within query tokens
+    # Each DB tag value is checked against each query token (both directions):
+    #   "제주" tag  + "제주도갔던" token → "제주" in token  → hit
+    #   "에버랜드" tag + "에버랜드" token  → exact match      → hit
+    if dynamic_tags:
+        for tag in dynamic_tags:
+            if not tag:
+                continue
+            # Exact token match or tag is a substring of a token (handles compound tokens)
+            if tag in tokens:
+                hits.add(tag)
+            elif tag in lowered:
+                hits.add(tag)
+            else:
+                # Check if any query token contains or is contained by the tag value
+                for token in tokens:
+                    if tag in token or (len(tag) >= 3 and token in tag):
+                        hits.add(tag)
+                        break
 
     return sorted(hits, key=lambda item: (len(item), item))
 

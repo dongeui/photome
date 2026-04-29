@@ -307,6 +307,10 @@ class ProcessingPipeline:
                     logger.debug("semantic maintenance cleared %d cached queries", cleared)
                     if invalidate_global_vector_index():
                         logger.debug("semantic maintenance invalidated FAISS index")
+                    # Invalidate tag vocabulary cache so new place/person tags
+                    # are immediately recognised in query planning
+                    from app.services.search.vocab import TagVocabularyCache
+                    TagVocabularyCache().invalidate()
 
                 return {
                     "skipped": False,
