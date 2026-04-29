@@ -3,14 +3,20 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date, timedelta
 from functools import lru_cache
 
+# ---------------------------------------------------------------------------
+# Core lexicon: Korean phrase → English CLIP prompts
+# ---------------------------------------------------------------------------
 LEXICON = {
+    # People
     "자전거": "bicycle bike cycling",
     "자동차": "car automobile vehicle",
     "차": "car vehicle",
     "사람": "person people human",
     "남자": "man male person",
+    "남성": "man male person",
     "여자": "woman female girl lady person portrait",
     "여성": "woman female girl lady person portrait",
     "얼굴": "face portrait person close-up selfie",
@@ -19,23 +25,93 @@ LEXICON = {
     "애기": "baby infant toddler child kid newborn",
     "아이": "child kid baby toddler",
     "어린이": "child kid toddler",
-    "강아지": "dog puppy",
-    "고양이": "cat",
-    "음식": "food meal",
-    "영수증": "receipt document",
-    "문서": "document paper page",
-    "화면": "screen screenshot",
-    "오류": "error failure warning",
-    "전송": "send transfer submit",
-    "실패": "failure failed error",
-    "동의": "agree consent accept",
-    "확인": "confirm ok check",
-    "취소": "cancel",
-    "버튼": "button",
-    "대화": "chat conversation message",
-    "메시지": "message chat",
+    "엄마": "mother mom woman family portrait",
+    "아빠": "father dad man family portrait",
+    "할머니": "grandmother elderly woman family portrait",
+    "할아버지": "grandfather elderly man family portrait",
+    "가족": "family group portrait people",
+    "친구": "friends group people smiling",
+    "커플": "couple love romantic portrait",
+    # Animals / nature
+    "강아지": "dog puppy cute animal",
+    "고양이": "cat kitten cute animal",
+    "꽃": "flower floral bloom garden",
+    "나무": "tree forest nature green",
+    "하늘": "sky clouds blue",
+    "바다": "sea ocean beach water waves",
+    "산": "mountain hiking outdoor landscape",
+    "강": "river stream water nature",
+    "공원": "park outdoor green nature",
+    "해변": "beach sand sea ocean",
+    "숲": "forest trees nature green",
+    # Food & drinks
+    "음식": "food meal dish restaurant",
+    "밥": "rice meal korean food",
+    "케이크": "cake dessert birthday celebration sweet",
+    "커피": "coffee cafe drink",
+    "초밥": "sushi japanese food meal",
+    "치킨": "chicken fried food meal",
+    "피자": "pizza food meal",
+    "술": "alcohol drink beer wine glass",
+    # Life events
+    "생일": "birthday cake celebration party happy",
+    "생일파티": "birthday party celebration cake candles",
+    "결혼식": "wedding ceremony couple formal",
+    "졸업": "graduation ceremony diploma academic",
+    "졸업식": "graduation ceremony diploma academic",
+    "파티": "party celebration people happy",
+    "여행": "travel trip landscape outdoor",
+    "여행사진": "travel trip landscape outdoor",
+    "휴가": "vacation travel leisure outdoor",
+    "운동": "exercise sports outdoor fitness",
+    "등산": "hiking mountain outdoor nature trail",
+    "수영": "swimming pool water sport",
+    "캠핑": "camping outdoor tent nature",
+    # Places
+    "카페": "cafe coffee shop interior cozy",
+    "식당": "restaurant food dining",
+    "집": "home house indoor interior",
+    "학교": "school classroom building",
+    "공항": "airport travel terminal",
+    "해외": "abroad overseas travel landmark",
+    "서울": "Seoul Korea cityscape urban",
+    "제주": "Jeju island beach Korea outdoor",
+    # Documents & screens
+    "영수증": "receipt document text paper purchase",
+    "문서": "document paper page text",
+    "화면": "screen screenshot app interface",
+    "스크린샷": "screenshot screen capture app",
+    "오류": "error failure warning message screen",
+    "전송": "send transfer submit button",
+    "실패": "failure failed error warning",
+    "동의": "agree consent accept button",
+    "확인": "confirm ok check button",
+    "취소": "cancel button",
+    "버튼": "button interface screen",
+    "대화": "chat conversation message screen",
+    "메시지": "message chat text screen",
+    # Holidays
+    "크리스마스": "Christmas holiday decoration tree",
+    "새해": "new year celebration fireworks",
+    "추석": "chuseok Korean holiday family traditional",
+    "설날": "seollal Korean new year traditional",
+    # Seasons (used for CLIP expansion, date extraction handled separately)
+    "봄": "spring flowers cherry blossom",
+    "여름": "summer beach outdoor sunny hot",
+    "가을": "autumn fall foliage orange leaves",
+    "겨울": "winter snow cold ice",
+    # Mood / style
+    "귀여운": "cute adorable",
+    "웃는": "smiling happy laughing",
+    "잠자는": "sleeping resting",
+    "야경": "night city lights cityscape",
+    "일출": "sunrise dawn morning",
+    "일몰": "sunset dusk evening",
 }
 
+# ---------------------------------------------------------------------------
+# Typo / informal form corrections
+# ---------------------------------------------------------------------------
 TYPO_CORRECTIONS = {
     "어르굴": "얼굴",
     "얼구": "얼굴",
@@ -47,8 +123,24 @@ TYPO_CORRECTIONS = {
     "아가": "아기",
     "애긔": "아기",
     "베이비": "아기",
+    "멍멍이": "강아지",
+    "냥이": "고양이",
+    "야옹이": "고양이",
 }
 
+# ---------------------------------------------------------------------------
+# Filler words to strip from Korean natural language queries
+# (kept for CLIP; date expressions handled separately)
+# ---------------------------------------------------------------------------
+_KO_FILLER = re.compile(
+    r"(?:찍은|찍었던|찍힌|촬영한|촬영된|에서|에서의|에서 찍은|에서 찍|에서 본|에서 본)\s*사진|"
+    r"찍은\s*사진|찍은\s*거|찍은\s*것|사진\s*좀|의\s*사진|이\s*사진|인\s*사진",
+    re.UNICODE,
+)
+
+# ---------------------------------------------------------------------------
+# English expansions for common photo terms
+# ---------------------------------------------------------------------------
 ENGLISH_EXPANSIONS = {
     "face": "face portrait person close-up selfie",
     "faces": "face portrait people person close-up selfie",
@@ -63,6 +155,24 @@ ENGLISH_EXPANSIONS = {
     "toddler": "baby toddler child kid",
     "child": "child kid baby toddler",
     "kid": "child kid baby toddler",
+    "dog": "dog puppy animal",
+    "cat": "cat kitten animal",
+    "food": "food meal dish restaurant",
+    "beach": "beach sea ocean sand waves",
+    "mountain": "mountain hiking outdoor landscape",
+    "travel": "travel trip landmark outdoor",
+    "party": "party celebration people happy",
+    "birthday": "birthday cake celebration party",
+    "wedding": "wedding ceremony couple formal",
+    "graduation": "graduation ceremony diploma academic",
+    "family": "family group portrait people",
+    "friends": "friends group people smiling",
+    "sunset": "sunset dusk evening orange sky",
+    "sunrise": "sunrise dawn morning sky",
+    "snow": "snow winter cold white",
+    "rain": "rain wet weather outdoor",
+    "flower": "flower floral bloom garden",
+    "sky": "sky clouds blue outdoor",
 }
 
 
@@ -72,14 +182,87 @@ def expand_for_clip(query: str) -> list[str]:
     if not cleaned:
         return []
 
-    variants = [cleaned]
-    translated = translate_to_english(cleaned)
-    if translated and translated.casefold() != cleaned.casefold():
+    # Strip filler phrases so CLIP gets the semantic core
+    semantic_core = _KO_FILLER.sub("", cleaned).strip()
+    if not semantic_core:
+        semantic_core = cleaned
+
+    variants = [semantic_core]
+    translated = translate_to_english(semantic_core)
+    if translated and translated.casefold() != semantic_core.casefold():
         variants.append(translated)
-    english = _expand_english_terms(cleaned)
+    english = _expand_english_terms(semantic_core)
     if english:
         variants.append(english)
+    # Include original cleaned query too if different from semantic_core
+    if cleaned != semantic_core:
+        variants.append(cleaned)
     return _dedupe(variants)
+
+
+def extract_date_range(query: str) -> tuple[date | None, date | None]:
+    """Extract an implicit date range from natural language Korean/English queries.
+
+    Returns (date_from, date_to) or (None, None) when no time expression found.
+    Recognized patterns: 작년/올해/이번달/지난달/이번주, 봄/여름/가을/겨울 + year modifier.
+    """
+    today = date.today()
+    year = today.year
+    lowered = query.casefold().strip()
+
+    # Explicit year mentions: "2023년", "23년"
+    explicit = re.search(r"(20\d{2}|[2-9]\d)년", query)
+    ref_year: int | None = None
+    if explicit:
+        raw = explicit.group(1)
+        ref_year = int(raw) if len(raw) == 4 else 2000 + int(raw)
+
+    # Year modifiers
+    if "재작년" in lowered:
+        ref_year = year - 2
+    elif "작년" in lowered or "지난해" in lowered:
+        ref_year = year - 1
+    elif "올해" in lowered or "이번해" in lowered:
+        ref_year = year
+
+    # Month modifiers
+    if "지난달" in lowered or "저번달" in lowered:
+        first_this = today.replace(day=1)
+        last_month_end = first_this - timedelta(days=1)
+        return last_month_end.replace(day=1), last_month_end
+    if "이번달" in lowered or "이번 달" in lowered:
+        return today.replace(day=1), today
+    if "이번주" in lowered or "이번 주" in lowered:
+        start = today - timedelta(days=today.weekday())
+        return start, today
+
+    # Season mapping
+    season_ranges: dict[str, tuple[int, int, int, int]] = {
+        "봄": (3, 1, 5, 31),
+        "spring": (3, 1, 5, 31),
+        "여름": (6, 1, 8, 31),
+        "summer": (6, 1, 8, 31),
+        "가을": (9, 1, 11, 30),
+        "fall": (9, 1, 11, 30),
+        "autumn": (9, 1, 11, 30),
+        "겨울": (12, 1, 2, 28),
+        "winter": (12, 1, 2, 28),
+    }
+    for season_key, (sm, sd, em, ed) in season_ranges.items():
+        if season_key in lowered:
+            y = ref_year or year
+            if sm > em:  # winter wraps year
+                date_from = date(y - 1 if ref_year is None else y, sm, sd)
+                date_to = date(y, em, ed)
+            else:
+                date_from = date(y, sm, sd)
+                date_to = date(y, em, min(ed, 30 if em in (4, 6, 9, 11) else 31))
+            return date_from, date_to
+
+    if ref_year is not None:
+        return date(ref_year, 1, 1), date(ref_year, 12, 31)
+
+    return None, None
 
 
 def normalize_query(query: str) -> str:

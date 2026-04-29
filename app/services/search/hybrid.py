@@ -1,12 +1,13 @@
 """Hybrid semantic/OCR search ranking.
 
-This is the first photomem search transplant. It is intentionally backend
-agnostic so the next step can wire it to photome's SQLAlchemy catalog instead
-of photomem's old raw SQLite schema.
+Backend-agnostic so it can be wired to any HybridSearchBackend implementation.
+Natural language date expressions (작년, 여름, etc.) are extracted here and
+propagated to the embedding backend as date filters.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, time
 from typing import Protocol
 
 from app.services.search import query_translate
@@ -17,13 +18,22 @@ RRF_K = 60.0
 FACE_HINTS = {
     "face", "faces", "person", "people", "portrait", "selfie",
     "woman", "women", "female", "girl", "baby", "infant", "toddler", "child", "kid",
-    "얼굴", "사람", "인물", "셀카", "남자", "여자", "여성", "아기", "애기", "아이", "어린이",
+    "얼굴", "사람", "인물", "셀카", "남자", "남성", "여자", "여성", "아기", "애기", "아이", "어린이",
+    "엄마", "아빠", "할머니", "할아버지", "가족", "친구", "커플",
 }
 TEXT_HINTS = {
     "text", "ocr", "document", "receipt", "error", "dialog", "message", "screen",
     "텍스트", "글씨", "문서", "영수증", "오류", "대화", "메시지", "화면",
 }
 SCREEN_HINTS = {"screenshot", "screen", "ui", "chat", "popup", "스크린샷", "화면", "앱", "대화창", "팝업"}
+TRAVEL_HINTS = {
+    "travel", "trip", "vacation", "abroad", "tour",
+    "여행", "휴가", "해외", "관광", "제주", "해변", "바다",
+}
+CELEBRATION_HINTS = {
+    "birthday", "party", "wedding", "graduation", "celebration",
+    "생일", "파티", "결혼식", "졸업", "졸업식", "축하", "크리스마스", "새해",
+}
 
 
 class HybridSearchBackend(Protocol):
@@ -63,6 +73,14 @@ class HybridSearchService:
 
         cleaned = query_translate.normalize_query(query)
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
+
+        # Auto-extract date range from natural language when caller didn't specify one
+        if date_from is None and date_to is None:
+            auto_date_from, auto_date_to = query_translate.extract_date_range(cleaned)
+            if auto_date_from is not None:
+                date_from = datetime.combine(auto_date_from, time.min)
+                date_to = datetime.combine(auto_date_to, time.max) if auto_date_to else None
+
         ocr_results = self._backend.search_by_ocr(cleaned, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
         effective_mode, intent_reason = resolve_effective_mode(cleaned, normalized_mode, ocr_results)
 
@@ -180,6 +198,8 @@ def resolve_effective_mode(query: str, requested_mode: str, ocr_results: list[di
     has_face_hint = any(hint in lowered for hint in FACE_HINTS)
     has_text_hint = any(hint in lowered for hint in TEXT_HINTS)
     has_screen_hint = any(hint in lowered for hint in SCREEN_HINTS)
+    has_travel_hint = any(hint in lowered for hint in TRAVEL_HINTS)
+    has_celebration_hint = any(hint in lowered for hint in CELEBRATION_HINTS)
     word_hits = [result for result in ocr_results if result.get("ocr_match_kind") == "word"]
     phrase_hits = [result for result in ocr_results if result.get("ocr_match_kind") == "phrase"]
     has_code_like_text = any(ch.isdigit() for ch in query) or any(ch in query for ch in "-_:/[]()#")
@@ -189,6 +209,11 @@ def resolve_effective_mode(query: str, requested_mode: str, ocr_results: list[di
         return "hybrid", "auto-mixed"
     if has_face_hint:
         return "semantic", "auto-face"
+    # Travel and celebration photos are strongly visual → prefer semantic
+    if has_travel_hint and not has_text_hint:
+        return "semantic", "auto-travel"
+    if has_celebration_hint and not has_text_hint:
+        return "semantic", "auto-celebration"
     if has_text_hint and not ocr_results:
         return "ocr", "auto-text-hint"
     if has_screen_hint and (word_hits or phrase_hits or is_short_query):

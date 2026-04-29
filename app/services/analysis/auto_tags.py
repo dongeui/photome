@@ -20,15 +20,35 @@ class ClipConcept:
 
 
 CLIP_CONCEPTS = (
+    # People
     ClipConcept("person", ("a photo of a person", "a portrait photo", "a human face"), 0.235),
-    ClipConcept("baby", ("a photo of a baby", "an infant lying down"), 0.260),
-    ClipConcept("receipt", ("a photo of a receipt", "a purchase receipt with text"), 0.255),
-    ClipConcept("screenshot", ("a smartphone screenshot", "a screenshot of an app"), 0.250),
-    ClipConcept("document", ("a document with text", "a page full of text"), 0.255),
-    ClipConcept("outdoor", ("an outdoor photo", "a street or park scene"), 0.245),
-    ClipConcept("food", ("a photo of food", "a meal on a table"), 0.252),
-    ClipConcept("vehicle", ("a car or vehicle", "a photo of transportation"), 0.232),
-    ClipConcept("night", ("a night photo", "a dark evening scene"), 0.245),
+    ClipConcept("baby", ("a photo of a baby", "an infant lying down", "a newborn baby"), 0.255),
+    ClipConcept("group", ("a group photo of people", "friends posing for a photo", "people gathered together"), 0.248),
+    # Documents / screens
+    ClipConcept("receipt", ("a photo of a receipt", "a purchase receipt with text", "a cash register receipt"), 0.252),
+    ClipConcept("screenshot", ("a smartphone screenshot", "a screenshot of an app", "a mobile app interface"), 0.248),
+    ClipConcept("document", ("a document with text", "a page full of text", "a printed document"), 0.252),
+    # Outdoors / nature
+    ClipConcept("outdoor", ("an outdoor photo", "a street or park scene", "outside in natural light"), 0.242),
+    ClipConcept("beach", ("a beach photo", "the sea and sand", "ocean waves on a beach"), 0.250),
+    ClipConcept("mountain", ("a mountain landscape", "a hiking trail on a mountain", "a mountain view"), 0.248),
+    ClipConcept("nature", ("a nature photo", "trees and greenery", "a forest or countryside scene"), 0.242),
+    ClipConcept("sky", ("a blue sky with clouds", "a sunset sky", "a dramatic sky landscape"), 0.240),
+    # Food & drink
+    ClipConcept("food", ("a photo of food", "a meal on a table", "a dish at a restaurant"), 0.248),
+    ClipConcept("cake", ("a birthday cake", "a decorated cake with candles", "a slice of cake"), 0.255),
+    ClipConcept("coffee", ("a cup of coffee", "a latte or espresso at a cafe", "a coffee drink"), 0.252),
+    # Life events
+    ClipConcept("celebration", ("a party or celebration", "people celebrating with drinks", "birthday party balloons"), 0.250),
+    ClipConcept("wedding", ("a wedding ceremony", "bride and groom together", "wedding flowers and dress"), 0.258),
+    ClipConcept("travel", ("a travel photo", "a tourist at a famous landmark", "sightseeing abroad"), 0.245),
+    # Lighting / time of day
+    ClipConcept("night", ("a night photo", "a dark evening scene", "city lights at night"), 0.242),
+    ClipConcept("sunset", ("a sunset photo", "golden hour sky", "sun setting over the horizon"), 0.248),
+    # Vehicles
+    ClipConcept("vehicle", ("a car or vehicle", "a photo of transportation", "a car on the road"), 0.232),
+    # Animals
+    ClipConcept("animal", ("a pet or animal", "a dog or cat", "an animal close-up portrait"), 0.240),
 )
 
 
@@ -64,7 +84,7 @@ def tags_from_embedding_vector(vector: np.ndarray) -> list[MediaTagInput]:
             hits.append((score, concept.tag))
 
     hits.sort(reverse=True)
-    return _to_auto_tags([tag for _, tag in hits[:3]])
+    return _to_auto_tags([tag for _, tag in hits[:5]])
 
 
 def merge_auto_tags(*tag_groups: list[MediaTagInput]) -> list[MediaTagInput]:
