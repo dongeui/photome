@@ -8,6 +8,7 @@ propagated to the embedding backend as date filters.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time as _time
@@ -19,12 +20,41 @@ from app.services.search.planner import QueryPlan, plan_query
 
 logger = logging.getLogger(__name__)
 
-RRF_K = 60.0
+# ---------------------------------------------------------------------------
+# Tunable constants — override via environment variables without code change
+# ---------------------------------------------------------------------------
+RRF_K: float = float(os.environ.get("PHOTOME_RRF_K", "60.0"))
+
+# Scoring bonuses (0.0–1.0 scale)
+BOOST_OCR_EXACT: float     = float(os.environ.get("PHOTOME_BOOST_OCR_EXACT",     "0.22"))
+BOOST_OCR_TOKEN: float     = float(os.environ.get("PHOTOME_BOOST_OCR_TOKEN",     "0.12"))
+BOOST_TAG_EXACT: float     = float(os.environ.get("PHOTOME_BOOST_TAG_EXACT",     "0.9"))
+BOOST_PROMOTED: float      = float(os.environ.get("PHOTOME_BOOST_PROMOTED",      "0.15"))
+BOOST_PLACE_MATCH: float   = float(os.environ.get("PHOTOME_BOOST_PLACE_MATCH",   "0.08"))
+BOOST_PERSON_MATCH: float  = float(os.environ.get("PHOTOME_BOOST_PERSON_MATCH",  "0.06"))
+BOOST_DATE_IN_RANGE: float = float(os.environ.get("PHOTOME_BOOST_DATE_IN_RANGE", "0.08"))
+
+# Multi-channel agreement multipliers
+CHANNEL_BONUS_2: float = float(os.environ.get("PHOTOME_CHANNEL_BONUS_2", "1.15"))
+CHANNEL_BONUS_3: float = float(os.environ.get("PHOTOME_CHANNEL_BONUS_3", "1.30"))
+
+# Result diversity & dedup
+DIVERSITY_MAX_PER_DAY: int = int(os.environ.get("PHOTOME_DIVERSITY_MAX_PER_DAY", "5"))
+BURST_DEDUP_SECONDS: int   = int(os.environ.get("PHOTOME_BURST_DEDUP_SECONDS",   "3"))
+
+# Fuzzy correction
+FUZZY_SIMILARITY_THRESHOLD: float = float(os.environ.get("PHOTOME_FUZZY_SIMILARITY", "0.5"))
+FUZZY_MAX_TAGS: int                = int(os.environ.get("PHOTOME_FUZZY_MAX_TAGS",     "2000"))
+
+# NGram scoring multipliers (OCR n-gram bonus)
+BOOST_NGRAM_NO_TEXT: float = float(os.environ.get("PHOTOME_BOOST_NGRAM_NO_TEXT", "0.10"))
+BOOST_NGRAM_FACTOR: float  = float(os.environ.get("PHOTOME_BOOST_NGRAM_FACTOR",  "0.08"))
 
 # ---------------------------------------------------------------------------
 # Simple TTL query result cache (in-memory, per-process)
 # ---------------------------------------------------------------------------
-_CACHE_TTL_SECONDS = 60
+_CACHE_TTL_SECONDS: int  = int(os.environ.get("PHOTOME_SEARCH_CACHE_TTL",      "60"))
+_CACHE_MAX_SIZE: int     = int(os.environ.get("PHOTOME_SEARCH_CACHE_MAX_SIZE",  "256"))
 _query_cache: dict[str, tuple[float, list[dict], dict]] = {}  # key → (ts, results, meta)
 _cache_lock = threading.Lock()  # protects _query_cache against concurrent writers
 
@@ -48,7 +78,7 @@ def _cache_get(key: str) -> tuple[list[dict], dict] | None:
 def _cache_set(key: str, results: list[dict], meta: dict) -> None:
     with _cache_lock:
         # Evict oldest entries when cache grows beyond 256 keys
-        if len(_query_cache) >= 256:
+        if len(_query_cache) >= _CACHE_MAX_SIZE:
             oldest_key = min(_query_cache, key=lambda k: _query_cache[k][0])
             del _query_cache[oldest_key]
         _query_cache[key] = (_time.monotonic(), results, meta)
@@ -488,9 +518,9 @@ def fuse_ranked_results(
         # Multi-channel agreement bonus: more channels = higher confidence
         n_channels = len(hits)
         if n_channels >= 3:
-            channel_multiplier = 1.30
+            channel_multiplier = CHANNEL_BONUS_3
         elif n_channels == 2:
-            channel_multiplier = 1.15
+            channel_multiplier = CHANNEL_BONUS_2
         else:
             channel_multiplier = 1.0
         result["rrf_score"] = rrf_base * channel_multiplier
@@ -650,7 +680,7 @@ def apply_date_soft_scoring(results: list[dict], plan: "QueryPlan") -> None:
             continue
 
         if in_range:
-            bonus = 0.08
+            bonus = BOOST_DATE_IN_RANGE
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
             result.setdefault("score_breakdown", []).append(
                 {"stage": "date_in_range_bonus", "delta": bonus,
@@ -677,11 +707,11 @@ def apply_context_filter_boost(results: list[dict], plan: "QueryPlan") -> None:
 
         matched_places = place_set & tag_values
         if matched_places:
-            bonus += 0.08 * len(matched_places)
+            bonus += BOOST_PLACE_MATCH * len(matched_places)
 
         matched_persons = person_set & tag_values
         if matched_persons:
-            bonus += 0.06 * len(matched_persons)
+            bonus += BOOST_PERSON_MATCH * len(matched_persons)
 
         if bonus > 0:
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
@@ -701,7 +731,7 @@ def apply_feedback_boost(results: list[dict], promoted_ids: set[str]) -> None:
         return
     for result in results:
         if str(result.get("file_id", "")) in promoted_ids:
-            bonus = 0.15
+            bonus = BOOST_PROMOTED
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
             result.setdefault("score_breakdown", []).append(
                 {"stage": "user_promoted", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
@@ -717,23 +747,23 @@ def apply_exact_ocr_boost(query: str, results: list[dict]) -> None:
             # Still apply ngram score bonus when OCR text is absent
             ngram = float(result.get("ngram_score") or 0.0)
             if ngram > 0:
-                bonus = ngram * 0.10
+                bonus = ngram * BOOST_NGRAM_NO_TEXT
                 result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
                 result.setdefault("score_breakdown", []).append(
                     {"stage": "ocr_ngram_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
                 )
             continue
         ocr_lower = ocr_text.casefold()
-        ngram_bonus = float(result.get("ngram_score") or 0.0) * 0.08
+        ngram_bonus = float(result.get("ngram_score") or 0.0) * BOOST_NGRAM_FACTOR
         if lowered in ocr_lower:
-            bonus = 0.22 + ngram_bonus
+            bonus = BOOST_OCR_EXACT + ngram_bonus
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
             result["ocr_exact_match"] = True
             result.setdefault("score_breakdown", []).append(
                 {"stage": "ocr_exact_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
             )
         elif tokens and all(token in ocr_lower for token in tokens):
-            bonus = 0.12 + ngram_bonus
+            bonus = BOOST_OCR_TOKEN + ngram_bonus
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
             result.setdefault("score_breakdown", []).append(
                 {"stage": "ocr_token_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
@@ -748,7 +778,7 @@ def apply_exact_ocr_boost(query: str, results: list[dict]) -> None:
 def apply_exact_tag_boost(results: list[dict]) -> None:
     for result in results:
         if result.get("tag_exact_match"):
-            bonus = 0.9
+            bonus = BOOST_TAG_EXACT
             result["rank_score"] = min(1.0, float(result.get("rank_score", 0.0)) + bonus)
             result.setdefault("score_breakdown", []).append(
                 {"stage": "tag_exact_bonus", "delta": bonus, "rank_score": float(result.get("rank_score") or 0.0)}
@@ -816,7 +846,7 @@ def set_match_explanations(results: list[dict]) -> None:
 def apply_diversity_cap(
     results: list[dict],
     *,
-    max_per_day: int = 5,
+    max_per_day: int = DIVERSITY_MAX_PER_DAY,
 ) -> list[dict]:
     """Limit how many results come from a single calendar day.
 
@@ -851,7 +881,7 @@ def apply_diversity_cap(
 def remove_near_duplicates(
     results: list[dict],
     *,
-    burst_seconds: int = 3,
+    burst_seconds: int = BURST_DEDUP_SECONDS,
 ) -> list[dict]:
     """Remove burst duplicates: keep only the highest-scoring photo per burst window.
 
@@ -924,7 +954,7 @@ def fuzzy_correct_query(query: str, tag_vocab: "object") -> str | None:
     from app.services.search.tokenizer import korean_nouns
 
     all_tags = getattr(tag_vocab, "all_tags", frozenset())
-    if not all_tags or len(all_tags) > 2000:
+    if not all_tags or len(all_tags) > FUZZY_MAX_TAGS:
         return None
 
     tokens = korean_nouns(query)
@@ -940,7 +970,7 @@ def fuzzy_correct_query(query: str, tag_vocab: "object") -> str | None:
             continue
 
         best_tag, best_sim = _best_bigram_match(token, all_tags)
-        if best_tag and best_sim >= 0.5:
+        if best_tag and best_sim >= FUZZY_SIMILARITY_THRESHOLD:
             corrected.append(best_tag)
             changed = True
         else:
