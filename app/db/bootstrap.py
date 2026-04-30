@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.settings import AppSettings
 from app.db.session import create_engine_for_settings, create_session_factory
 from app.models.base import Base
-from app.models import annotation, asset, face, job, media, observation, person, semantic, tag  # noqa: F401  ensure models are registered
+from app.models import annotation, asset, face, job, media, observation, person, runtime, semantic, tag  # noqa: F401  ensure models are registered
 
 
 logger = logging.getLogger(__name__)

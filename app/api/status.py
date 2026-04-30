@@ -6,7 +6,7 @@ from html import escape
 import json
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import require_state
@@ -21,6 +21,10 @@ from sqlalchemy import func
 router = APIRouter(tags=["status"])
 
 
+def _schedule_label(hours: int | None) -> str:
+    return "None" if hours is None else f"{hours}h"
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request) -> HTMLResponse:
     payload = await status(request)
@@ -32,6 +36,8 @@ async def dashboard(request: Request) -> HTMLResponse:
     source_roots = payload["storage"]["source_roots"]
     source_roots_text = escape("\n".join(source_roots))
     active_library_job_json = json.dumps(jobs.get("active_library_job"), default=str)
+    phase1_schedule_label = _schedule_label(payload["scheduler"].get("phase1_interval_hours"))
+    phase2_schedule_label = _schedule_label(payload["scheduler"].get("phase2_interval_hours"))
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -178,6 +184,11 @@ async def dashboard(request: Request) -> HTMLResponse:
       background: rgba(19,32,42,0.05);
       border: 1px solid rgba(19,32,42,0.07);
       font-size: .88rem;
+    }}
+    .pill-button {{
+      cursor: pointer;
+      color: var(--text);
+      font: inherit;
     }}
     .status-ok {{ color: var(--ok); }}
     .status-warn {{ color: var(--warn); }}
@@ -405,7 +416,7 @@ async def dashboard(request: Request) -> HTMLResponse:
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if scheduler['enabled'] else 'status-warn'}">{escape(str(scheduler['enabled']))}</span></span>
           <span class="pill"><strong>Running</strong> <span class="{'status-ok' if scheduler['running'] else 'status-warn'}">{escape(str(scheduler['running']))}</span></span>
           <span class="pill"><strong>Poll</strong> {scheduler['poll_interval_seconds']}s</span>
-          <span class="pill"><strong>Full Scan</strong> {scheduler['daily_full_scan_hour']:02d}:{scheduler['daily_full_scan_minute']:02d}</span>
+          <button type="button" class="pill pill-button" id="phase1-schedule-button"><strong>Schedule</strong> {phase1_schedule_label}</button>
         </div>
         <div class="list" style="margin-top:14px;">
           <div class="row"><span>Last poll</span><span>{escape(str(scheduler['last_poll_at']))}</span></div>
@@ -431,6 +442,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if semantic['scheduler_enabled'] else 'status-warn'}">{escape(str(semantic['scheduler_enabled']))}</span></span>
           <span class="pill"><strong>Interval</strong> {semantic['scheduler_interval_seconds']}s</span>
+          <button type="button" class="pill pill-button" id="phase2-schedule-button"><strong>Schedule</strong> {phase2_schedule_label}</button>
           <span class="pill"><strong>Face Analysis</strong> <span class="{'status-ok' if semantic['runtime']['face_analysis_enabled'] else 'status-warn'}">{escape(str(semantic['runtime']['face_analysis_enabled']))}</span></span>
           <span class="pill"><strong>Place Precision</strong> {semantic['runtime']['place_tag_precision']}</span>
         </div>
@@ -514,11 +526,13 @@ async def dashboard(request: Request) -> HTMLResponse:
     const scanResult = document.getElementById("phase1-scan-result");
     const scanCard = document.getElementById("phase1-card");
     const scanButton = document.getElementById("phase1-scan-button");
+    const phase1ScheduleButton = document.getElementById("phase1-schedule-button");
     const sourceRootsField = document.getElementById("phase1-source-roots");
     const semanticForm = document.getElementById("phase2-semantic-form");
     const semanticResult = document.getElementById("phase2-semantic-result");
     const semanticCard = document.getElementById("phase2-card");
     const semanticButton = document.getElementById("phase2-semantic-button");
+    const phase2ScheduleButton = document.getElementById("phase2-schedule-button");
     const phase1StorageKey = "photome.dashboard.phase1.job";
     const phase2StorageKey = "photome.dashboard.phase2.job";
     const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";
@@ -528,6 +542,9 @@ async def dashboard(request: Request) -> HTMLResponse:
       if (kind === "scan") return "Phase 1 scan";
       if (kind === "semantic_backfill" || kind === "semantic_maintenance") return "Phase 2 semantic job";
       return "Library job";
+    }}
+    function scheduleLabel(hours) {{
+      return hours === null || hours === undefined ? "None" : `${{hours}}h`;
     }}
     function updateLibraryJobGuards() {{
       const active = activeLibraryJob;
@@ -557,8 +574,33 @@ async def dashboard(request: Request) -> HTMLResponse:
         const payload = await response.json();
         if (!response.ok) return;
         activeLibraryJob = payload?.jobs?.active_library_job || null;
+        const scheduler = payload?.scheduler || {{}};
+        if (phase1ScheduleButton) phase1ScheduleButton.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
+        if (phase2ScheduleButton) phase2ScheduleButton.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
         updateLibraryJobGuards();
       }} catch (_error) {{}}
+    }}
+    async function cycleSchedule(phase, button) {{
+      if (!button) return;
+      button.disabled = true;
+      try {{
+        const response = await fetch(`/scheduler/cycle/${{phase}}`, {{ method: "POST" }});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
+        const scheduler = payload.scheduler || {{}};
+        if (phase === "phase1") {{
+          button.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
+        }} else {{
+          button.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
+        }}
+        await refreshDashboardStatus();
+      }} catch (error) {{
+        const target = phase === "phase1" ? scanResult : semanticResult;
+        target.classList.add("visible");
+        target.textContent = `error: ${{error.message}}`;
+      }} finally {{
+        button.disabled = false;
+      }}
     }}
     function formatElapsed(startedAt, finishedAt) {{
       if (!startedAt) return "";
@@ -704,6 +746,8 @@ async def dashboard(request: Request) -> HTMLResponse:
     }}
     updateLibraryJobGuards();
     setInterval(refreshDashboardStatus, 3000);
+    phase1ScheduleButton?.addEventListener("click", () => cycleSchedule("phase1", phase1ScheduleButton));
+    phase2ScheduleButton?.addEventListener("click", () => cycleSchedule("phase2", phase2ScheduleButton));
     sourceRootsField?.addEventListener("input", () => {{
       rememberText(phase1SourceRootsStorageKey, sourceRootsField.value);
     }});
@@ -924,3 +968,12 @@ async def status(request: Request) -> dict[str, Any]:
                 "error": catalog.count_media(status="error"),
             },
         }
+
+
+@router.post("/scheduler/cycle/{phase}")
+async def cycle_scheduler_phase(phase: str, request: Request) -> dict[str, Any]:
+    if phase not in {"phase1", "phase2"}:
+        raise HTTPException(status_code=404, detail="unknown scheduler phase")
+    scheduler = require_state(request, "scheduler")
+    snapshot = scheduler.cycle_phase_schedule(phase)
+    return {"scheduler": serialize_scheduler_snapshot(snapshot)}

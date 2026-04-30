@@ -8,6 +8,7 @@ from app.models.media import MediaFile
 from app.models.job import ProcessingJob
 from app.models.observation import ScanObservation
 from app.models.person import Person
+from app.models.runtime import SchedulerRuntimeConfig
 from app.models.semantic import (
     GeocodingCache,
     MediaAnalysisSignal,
@@ -41,6 +42,7 @@ __all__ = [
     "Person",
     "ProcessingJob",
     "ScanObservation",
+    "SchedulerRuntimeConfig",
     "SearchDocument",
     "SearchFeedback",
     "Tag",

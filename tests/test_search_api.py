@@ -15,6 +15,7 @@ from app.core.settings import load_settings
 from app.db.bootstrap import build_database_state
 from app.main import create_app
 from app.models.job import ProcessingJob
+from app.models.runtime import SchedulerRuntimeConfig
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
 
 
@@ -317,6 +318,8 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
     assert "let activeLibraryJob =" in html
     assert "function updateLibraryJobGuards()" in html
     assert "setInterval(refreshDashboardStatus, 3000);" in html
+    assert 'id="phase1-schedule-button"' in html
+    assert 'id="phase2-schedule-button"' in html
     assert 'id="phase1-full-scan"' not in html
     assert 'params.set("full_scan", "true");' in html
     assert "function formatElapsed(startedAt, finishedAt)" in html
@@ -418,6 +421,28 @@ def test_startup_recovers_interrupted_library_jobs(monkeypatch: pytest.MonkeyPat
             assert recovered.status == "canceled"
             assert recovered.error_stage == "interrupted"
             assert recovered.result_json["progress"]["resume_supported"] is True
+
+
+def test_cycle_scheduler_phase_updates_runtime_schedule(client: TestClient) -> None:
+    client.app.state.scheduler.stop()
+    first = client.post("/scheduler/cycle/phase1")
+    second = client.post("/scheduler/cycle/phase1")
+    phase2 = client.post("/scheduler/cycle/phase2")
+
+    assert first.status_code == 200
+    assert first.json()["scheduler"]["phase1_interval_hours"] == 6
+    assert second.status_code == 200
+    assert second.json()["scheduler"]["phase1_interval_hours"] == 12
+    assert phase2.status_code == 200
+    assert phase2.json()["scheduler"]["phase2_interval_hours"] == 6
+    assert first.json()["scheduler"]["next_full_scan_at"] is not None
+    assert phase2.json()["scheduler"]["next_semantic_maintenance_at"] is not None
+
+    with client.app.state.database.session_factory() as session:
+        runtime_config = session.get(SchedulerRuntimeConfig, 1)
+        assert runtime_config is not None
+        assert runtime_config.last_phase1_run_at is not None
+        assert runtime_config.last_phase2_run_at is not None
 
 
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:
