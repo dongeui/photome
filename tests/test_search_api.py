@@ -13,6 +13,7 @@ from sqlalchemy import func, select, text
 
 from app.core.settings import load_settings
 from app.main import create_app
+from app.models.job import ProcessingJob
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
 
 
@@ -312,6 +313,9 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
     assert 'const phase1StorageKey = "photome.dashboard.phase1.job";' in html
     assert 'const phase2StorageKey = "photome.dashboard.phase2.job";' in html
     assert 'const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";' in html
+    assert "let activeLibraryJob =" in html
+    assert "function updateLibraryJobGuards()" in html
+    assert "setInterval(refreshDashboardStatus, 3000);" in html
     assert "function formatElapsed(startedAt, finishedAt)" in html
     assert "async function pollJob(jobId, resultNode, render)" in html
     assert "if (progress.message) lines.push(progress.message);" in html
@@ -333,6 +337,42 @@ def test_async_semantic_job_returns_conflict_when_catalog_is_locked(
 
     assert response.status_code == 409
     assert "Another library job is still writing to the catalog" in response.json()["detail"]
+
+
+def test_phase2_async_is_blocked_while_phase1_job_is_active(client: TestClient) -> None:
+    with client.app.state.database.session_factory() as session:
+        session.add(
+            ProcessingJob(
+                job_kind="scan",
+                status="running",
+                payload_json={"trigger": "test"},
+                attempts=1,
+            )
+        )
+        session.commit()
+
+    response = client.post("/scan/semantic-maintenance/async", params={"batch_size": 10})
+
+    assert response.status_code == 409
+    assert "Phase 1 scan is already active" in response.json()["detail"]
+
+
+def test_phase1_async_is_blocked_while_phase2_job_is_active(client: TestClient) -> None:
+    with client.app.state.database.session_factory() as session:
+        session.add(
+            ProcessingJob(
+                job_kind="semantic_maintenance",
+                status="running",
+                payload_json={"trigger": "test"},
+                attempts=1,
+            )
+        )
+        session.commit()
+
+    response = client.post("/scan/async")
+
+    assert response.status_code == 409
+    assert "Phase 2 semantic work is already active" in response.json()["detail"]
 
 
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:

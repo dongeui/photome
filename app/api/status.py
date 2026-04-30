@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from html import escape
+import json
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -30,6 +31,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     health = payload["health"]
     source_roots = payload["storage"]["source_roots"]
     source_roots_text = escape("\n".join(source_roots))
+    active_library_job_json = json.dumps(jobs.get("active_library_job"))
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -521,7 +523,44 @@ async def dashboard(request: Request) -> HTMLResponse:
     const phase1StorageKey = "photome.dashboard.phase1.job";
     const phase2StorageKey = "photome.dashboard.phase2.job";
     const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";
+    let activeLibraryJob = {active_library_job_json};
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    function jobKindLabel(kind) {{
+      if (kind === "scan") return "Phase 1 scan";
+      if (kind === "semantic_backfill" || kind === "semantic_maintenance") return "Phase 2 semantic job";
+      return "Library job";
+    }}
+    function updateLibraryJobGuards() {{
+      const active = activeLibraryJob;
+      const hasActive = !!active && ["queued", "running"].includes(active.status || "");
+      const phase1OwnsActive = hasActive && active.job_kind === "scan";
+      const phase2OwnsActive = hasActive && (active.job_kind === "semantic_backfill" || active.job_kind === "semantic_maintenance");
+
+      if (!scanCard.classList.contains("is-running")) {{
+        scanButton.disabled = phase2OwnsActive;
+      }}
+      if (!semanticCard.classList.contains("is-running")) {{
+        semanticButton.disabled = phase1OwnsActive;
+      }}
+
+      if (phase2OwnsActive && !scanCard.classList.contains("is-running")) {{
+        scanResult.classList.add("visible");
+        scanResult.textContent = `${{jobKindLabel(active.job_kind)}} is active. Phase 1 waits until it finishes.`;
+      }}
+      if (phase1OwnsActive && !semanticCard.classList.contains("is-running")) {{
+        semanticResult.classList.add("visible");
+        semanticResult.textContent = `${{jobKindLabel(active.job_kind)}} is active. Phase 2 waits until Phase 1 finishes.`;
+      }}
+    }}
+    async function refreshDashboardStatus() {{
+      try {{
+        const response = await fetch("/status", {{ cache: "no-store" }});
+        const payload = await response.json();
+        if (!response.ok) return;
+        activeLibraryJob = payload?.jobs?.active_library_job || null;
+        updateLibraryJobGuards();
+      }} catch (_error) {{}}
+    }}
     function formatElapsed(startedAt, finishedAt) {{
       if (!startedAt) return "";
       const start = new Date(startedAt);
@@ -664,15 +703,24 @@ async def dashboard(request: Request) -> HTMLResponse:
     if (sourceRootsField && rememberedSourceRoots.trim()) {{
       sourceRootsField.value = rememberedSourceRoots;
     }}
+    updateLibraryJobGuards();
+    setInterval(refreshDashboardStatus, 3000);
     sourceRootsField?.addEventListener("input", () => {{
       rememberText(phase1SourceRootsStorageKey, sourceRootsField.value);
     }});
     scanForm?.addEventListener("submit", async (event) => {{
       event.preventDefault();
+      if (activeLibraryJob && ["queued", "running"].includes(activeLibraryJob.status || "") && activeLibraryJob.job_kind !== "scan") {{
+        scanResult.classList.add("visible");
+        scanResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is active. Phase 1 waits until it finishes.`;
+        return;
+      }}
       scanResult.classList.add("visible");
       scanCard.classList.add("is-running");
       scanButton.disabled = true;
       scanResult.textContent = "Starting scan...";
+      activeLibraryJob = {{ job_kind: "scan", status: "queued" }};
+      updateLibraryJobGuards();
       const sourceRoots = sourceRootsField ? sourceRootsField.value : "";
       rememberText(phase1SourceRootsStorageKey, sourceRoots);
       const fullScan = document.getElementById("phase1-full-scan").checked;
@@ -695,11 +743,16 @@ async def dashboard(request: Request) -> HTMLResponse:
         forgetJob(phase1StorageKey);
       }} finally {{
         scanCard.classList.remove("is-running");
-        scanButton.disabled = false;
+        refreshDashboardStatus();
       }}
     }});
     semanticForm?.addEventListener("submit", async (event) => {{
       event.preventDefault();
+      if (activeLibraryJob && ["queued", "running"].includes(activeLibraryJob.status || "") && activeLibraryJob.job_kind !== "semantic_backfill" && activeLibraryJob.job_kind !== "semantic_maintenance") {{
+        semanticResult.classList.add("visible");
+        semanticResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is active. Phase 2 waits until Phase 1 finishes.`;
+        return;
+      }}
       semanticResult.classList.add("visible");
       semanticCard.classList.add("is-running");
       semanticButton.disabled = true;
@@ -709,6 +762,8 @@ async def dashboard(request: Request) -> HTMLResponse:
       const params = new URLSearchParams();
       if (batchSize.trim()) params.set("batch_size", batchSize);
       const endpoint = mode === "backfill" ? "/scan/semantic-backfill/async" : "/scan/semantic-maintenance/async";
+      activeLibraryJob = {{ job_kind: mode === "backfill" ? "semantic_backfill" : "semantic_maintenance", status: "queued" }};
+      updateLibraryJobGuards();
       try {{
         const response = await fetch(`${{endpoint}}?${{params.toString()}}`, {{ method: "POST" }});
         const payload = await response.json();
@@ -725,7 +780,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         forgetJob(phase2StorageKey);
       }} finally {{
         semanticCard.classList.remove("is-running");
-        semanticButton.disabled = false;
+        refreshDashboardStatus();
       }}
     }});
     resumeJob(phase1StorageKey, scanCard, scanButton, scanResult, renderScanJob);

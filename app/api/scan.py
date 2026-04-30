@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.api.deps import require_state
 from app.models.job import ProcessingJob
+from app.services.processing.pipeline import LibraryJobBusyError
 
 
 router = APIRouter(tags=["scan"])
@@ -25,12 +26,15 @@ async def trigger_scan(
 ) -> dict[str, Any]:
     pipeline = require_state(request, "pipeline")
     requested_roots = _parse_source_roots(source_root=source_root, source_roots=source_roots)
-    summary = pipeline.submit_scan_job(
-        full_scan=full_scan,
-        run_now=True,
-        trigger="api",
-        source_roots=requested_roots,
-    )
+    try:
+        summary = pipeline.submit_scan_job(
+            full_scan=full_scan,
+            run_now=True,
+            trigger="api",
+            source_roots=requested_roots,
+        )
+    except LibraryJobBusyError as exc:
+        _raise_active_job_conflict(exc)
     return {"job": asdict(summary)}
 
 
@@ -51,6 +55,8 @@ async def trigger_scan_async(
             trigger="api-async",
             source_roots=requested_roots,
         )
+    except LibraryJobBusyError as exc:
+        _raise_active_job_conflict(exc)
     except OperationalError as exc:
         _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_scan_job, summary.job_id)
@@ -89,7 +95,10 @@ async def trigger_semantic_backfill(
 ) -> dict[str, Any]:
     """Generate CLIP embeddings for any media that missed the semantic pass."""
     pipeline = require_state(request, "pipeline")
-    result = pipeline.run_semantic_backfill(batch_size=batch_size)
+    try:
+        result = pipeline.run_semantic_backfill(batch_size=batch_size)
+    except LibraryJobBusyError as exc:
+        _raise_active_job_conflict(exc)
     return result
 
 
@@ -106,6 +115,8 @@ async def trigger_semantic_backfill_async(
             run_now=False,
             trigger="api-async",
         )
+    except LibraryJobBusyError as exc:
+        _raise_active_job_conflict(exc)
     except OperationalError as exc:
         _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
@@ -119,7 +130,10 @@ async def trigger_semantic_maintenance(
 ) -> dict[str, Any]:
     """Refresh Phase 2 search documents for only stale or missing rows."""
     pipeline = require_state(request, "pipeline")
-    return pipeline.run_semantic_maintenance(batch_size=batch_size)
+    try:
+        return pipeline.run_semantic_maintenance(batch_size=batch_size)
+    except LibraryJobBusyError as exc:
+        _raise_active_job_conflict(exc)
 
 
 @router.post("/scan/semantic-maintenance/async", status_code=status.HTTP_202_ACCEPTED)
@@ -135,6 +149,8 @@ async def trigger_semantic_maintenance_async(
             run_now=False,
             trigger="api-async",
         )
+    except LibraryJobBusyError as exc:
+        _raise_active_job_conflict(exc)
     except OperationalError as exc:
         _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
@@ -182,3 +198,19 @@ def _raise_job_submission_busy(exc: OperationalError) -> None:
             detail="Another library job is still writing to the catalog. Wait a moment and try again.",
         ) from exc
     raise exc
+
+
+def _raise_active_job_conflict(exc: LibraryJobBusyError) -> None:
+    active = exc.active_job
+    kind = str(active.get("job_kind") or "job")
+    status_name = str(active.get("status") or "queued")
+    if kind == "scan":
+        detail = "Phase 1 scan is already active. Wait for it to finish before starting Phase 2."
+    elif kind in {"semantic_backfill", "semantic_maintenance"}:
+        detail = "Phase 2 semantic work is already active. Wait for it to finish before starting Phase 1."
+    else:
+        detail = f"Another library job is active ({kind}/{status_name}). Wait for it to finish."
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=detail,
+    ) from exc

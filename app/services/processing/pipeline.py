@@ -136,6 +136,7 @@ class ProcessingPipeline:
             payload["source_roots"] = [str(path) for path in source_roots]
 
         with self._session_factory() as session:
+            self._ensure_no_active_library_job(session)
             job = ProcessingJob(
                 job_kind=ProcessingJobKind.SCAN.value,
                 status=ProcessingJobState.QUEUED.value,
@@ -182,6 +183,7 @@ class ProcessingPipeline:
     ) -> PipelineSummary:
         payload: dict[str, Any] = {"batch_size": batch_size, "trigger": trigger}
         with self._session_factory() as session:
+            self._ensure_no_active_library_job(session)
             job = ProcessingJob(
                 job_kind=ProcessingJobKind.SEMANTIC_BACKFILL.value,
                 status=ProcessingJobState.QUEUED.value,
@@ -210,6 +212,7 @@ class ProcessingPipeline:
     ) -> PipelineSummary:
         payload: dict[str, Any] = {"batch_size": batch_size, "trigger": trigger}
         with self._session_factory() as session:
+            self._ensure_no_active_library_job(session)
             job = ProcessingJob(
                 job_kind=ProcessingJobKind.SEMANTIC_MAINTENANCE.value,
                 status=ProcessingJobState.QUEUED.value,
@@ -526,6 +529,7 @@ class ProcessingPipeline:
         with self._session_factory() as session:
             catalog = MediaCatalog(session)
             job_counts = self._job_counts(session)
+            active_job = self._active_library_job(session)
             return {
                 "media": {
                     "total": catalog.count_media(),
@@ -536,7 +540,10 @@ class ProcessingPipeline:
                     "missing": catalog.count_media(status="missing"),
                     "observations": catalog.observation_status_counts(),
                 },
-                "jobs": job_counts,
+                "jobs": {
+                    **job_counts,
+                    "active_library_job": active_job,
+                },
             }
 
     def _run_scan_job(
@@ -1153,6 +1160,35 @@ class ProcessingPipeline:
             kind_counts[job_kind] = int(count)
         return {"status_counts": status_counts, "kind_counts": kind_counts}
 
+    def _active_library_job(self, session: Session) -> dict[str, Any] | None:
+        job = session.execute(
+            select(ProcessingJob)
+            .where(
+                ProcessingJob.job_kind.in_(LIBRARY_JOB_KINDS),
+                ProcessingJob.status.in_((ProcessingJobState.QUEUED.value, ProcessingJobState.RUNNING.value)),
+            )
+            .order_by(ProcessingJob.enqueued_at.asc(), ProcessingJob.updated_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if job is None:
+            return None
+        return {
+            "id": job.id,
+            "job_kind": job.job_kind,
+            "status": job.status,
+            "payload": job.payload_json,
+            "result": job.result_json,
+            "started_at": job.started_at,
+            "enqueued_at": job.enqueued_at,
+            "updated_at": job.updated_at,
+        }
+
+    def _ensure_no_active_library_job(self, session: Session) -> None:
+        active = self._active_library_job(session)
+        if active is None:
+            return
+        raise LibraryJobBusyError(active)
+
     def _to_summary(self, job: ProcessingJob) -> PipelineSummary:
         return PipelineSummary(
             job_id=job.id,
@@ -1230,3 +1266,15 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+LIBRARY_JOB_KINDS = (
+    ProcessingJobKind.SCAN.value,
+    ProcessingJobKind.SEMANTIC_BACKFILL.value,
+    ProcessingJobKind.SEMANTIC_MAINTENANCE.value,
+)
+
+
+class LibraryJobBusyError(RuntimeError):
+    def __init__(self, active_job: dict[str, Any]) -> None:
+        self.active_job = active_job
+        kind = str(active_job.get("job_kind") or "job")
+        super().__init__(f"Another library job is active: {kind}")
