@@ -17,6 +17,7 @@ from app.main import create_app
 from app.models.job import ProcessingJob
 from app.models.runtime import SchedulerRuntimeConfig
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
+from app.services.processing.incremental import IncrementalScanSummary
 
 
 SCAN_DELAY_SECONDS = 1.1
@@ -443,6 +444,73 @@ def test_cycle_scheduler_phase_updates_runtime_schedule(client: TestClient) -> N
         assert runtime_config is not None
         assert runtime_config.last_phase1_run_at is not None
         assert runtime_config.last_phase2_run_at is not None
+
+
+def test_run_scan_job_persists_running_state_before_long_work(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pipeline = client.app.state.pipeline
+    database = client.app.state.database
+    source_root = tmp_path / "source"
+    source_root.mkdir(exist_ok=True)
+    image_path = source_root / "sample.jpg"
+    image_path.write_bytes(b"fake")
+
+    summary = pipeline.submit_scan_job(
+        full_scan=True,
+        run_now=False,
+        trigger="test",
+        source_roots=(source_root,),
+    )
+
+    def fake_run(self, session):  # type: ignore[no-untyped-def]
+        with database.session_factory() as verify_session:
+            job = verify_session.get(ProcessingJob, summary.job_id)
+            assert job is not None
+            assert job.status == "running"
+            assert job.started_at is not None
+            assert (job.result_json or {}).get("progress", {}).get("stage") == "scanning"
+        return IncrementalScanSummary(scanned=1, created=0, updated=0, moved=0, missing=0, failed=0)
+
+    monkeypatch.setattr("app.services.processing.pipeline.IncrementalScanService.run", fake_run)
+    monkeypatch.setattr(pipeline, "_process_pending_media", lambda *args, **kwargs: {"pending": 0, "succeeded": 0, "failed": 0})
+
+    result = pipeline.run_scan_job(summary.job_id)
+
+    assert result.status == "succeeded"
+
+
+def test_run_semantic_job_persists_running_state_before_long_work(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = client.app.state.pipeline
+    database = client.app.state.database
+
+    summary = pipeline.submit_semantic_maintenance_job(
+        batch_size=10,
+        run_now=False,
+        trigger="test",
+    )
+
+    def fake_maintenance(*, batch_size: int, progress_callback=None):  # type: ignore[no-untyped-def]
+        with database.session_factory() as verify_session:
+            job = verify_session.get(ProcessingJob, summary.job_id)
+            assert job is not None
+            assert job.status == "running"
+            assert job.started_at is not None
+            assert (job.result_json or {}).get("progress", {}).get("stage") == "collecting"
+        if progress_callback is not None:
+            progress_callback({"mode": "maintenance", "pending": 0, "current": 0, "succeeded": 0, "failed": 0})
+        return {"skipped": False, "pending": 0, "succeeded": 0, "failed": 0, "has_more": False}
+
+    monkeypatch.setattr(pipeline, "run_semantic_maintenance", fake_maintenance)
+
+    result = pipeline.run_semantic_job(summary.job_id)
+
+    assert result.status == "succeeded"
 
 
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:

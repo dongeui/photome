@@ -506,7 +506,7 @@ class ProcessingPipeline:
             message="Collecting semantic work items.",
             details={"mode": mode, "batch_size": batch_size},
         )
-        session.flush()
+        session.commit()
 
         try:
             if mode == "backfill":
@@ -539,7 +539,7 @@ class ProcessingPipeline:
             job.error_stage = f"semantic_{mode}"
             job.error_message = str(exc)
             job.finished_at = datetime.utcnow()
-            session.flush()
+            session.commit()
             raise
 
         job.status = ProcessingJobState.SUCCEEDED.value
@@ -554,7 +554,7 @@ class ProcessingPipeline:
             "failed": result.get("failed", 0),
         }
         job.finished_at = datetime.utcnow()
-        session.flush()
+        session.commit()
         return result
 
     def status_snapshot(self) -> dict[str, Any]:
@@ -602,7 +602,7 @@ class ProcessingPipeline:
                 "source_roots": [str(path) for path in source_roots] if source_roots is not None else None,
             },
         )
-        session.flush()
+        session.commit()
 
         try:
             scanner = self._scanner.with_source_roots(source_roots) if source_roots is not None else self._scanner
@@ -622,6 +622,7 @@ class ProcessingPipeline:
                     "summary": asdict(scan_summary),
                 },
             )
+            session.commit()
             processed_summary = self._process_pending_media(session, trigger_job_id=job.id, parent_job=job)
         except Exception as exc:
             logger.exception("scan job failed", extra={"job_id": job.id})
@@ -629,7 +630,7 @@ class ProcessingPipeline:
             job.error_stage = "scan"
             job.error_message = str(exc)
             job.finished_at = datetime.utcnow()
-            session.flush()
+            session.commit()
             raise
 
         job.status = ProcessingJobState.SUCCEEDED.value
@@ -646,6 +647,7 @@ class ProcessingPipeline:
             },
         }
         job.finished_at = datetime.utcnow()
+        session.commit()
         return scan_summary
 
     def _process_pending_media(self, session: Session, *, trigger_job_id: str, parent_job: ProcessingJob | None = None) -> dict[str, Any]:
@@ -670,6 +672,7 @@ class ProcessingPipeline:
                     }
                 },
             )
+            session.commit()
 
         for index, media_file in enumerate(pending_media, start=1):
             job = ProcessingJob(
@@ -696,6 +699,7 @@ class ProcessingPipeline:
                 job.error_message = str(exc)
                 job.finished_at = datetime.utcnow()
                 failed += 1
+            session.commit()
 
             if parent_job is not None and (index == 1 or index == total or index % 25 == 0):
                 self._set_job_progress(
@@ -712,8 +716,8 @@ class ProcessingPipeline:
                         }
                     },
                 )
+                session.commit()
 
-        session.flush()
         return {
             "pending": len(pending_media),
             "succeeded": succeeded,

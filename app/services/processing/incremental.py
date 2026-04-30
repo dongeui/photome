@@ -102,7 +102,7 @@ class IncrementalScanService:
                 catalog.mark_media_error(identity.file_id, stage="metadata", message=metadata_error, now=now)
                 logger.error("failed to extract metadata for scanned file", extra={"path": str(scan_record.path)})
             elif metadata_result is not None and metadata_result.warnings:
-                logger.warning(
+                logger.debug(
                     "metadata warnings",
                     extra={"path": str(scan_record.path), "warnings": metadata_result.warnings},
                 )
