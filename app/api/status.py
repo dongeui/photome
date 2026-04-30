@@ -33,6 +33,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     catalog = payload["catalog"]
     jobs = payload["jobs"]
     health = payload["health"]
+    security = payload["security"]
     source_roots = payload["storage"]["source_roots"]
     source_roots_text = escape("\n".join(source_roots))
     active_library_job_json = json.dumps(jobs.get("active_library_job"), default=str)
@@ -384,10 +385,14 @@ async def dashboard(request: Request) -> HTMLResponse:
 <body>
   <main class="shell">
     <section class="hero">
-      <div>
+        <div>
         <span class="eyebrow">Local Service Status</span>
         <h1>Two loops, one library.</h1>
         <p>Phase 1 keeps polling NAS originals into a stable local catalog. Phase 2 keeps scheduling semantic enrichment on top of cached media so new files and version changes keep flowing through without manual resets.</p>
+        <div class="pill-row" style="margin-top:14px;">
+          <span class="pill"><strong>Runtime</strong> {escape(security["runtime_mode"])}</span>
+          <span class="pill"><strong>Outbound Network</strong> <span class="{'status-ok' if not security['outbound_network_enabled'] else 'status-warn'}">{'blocked' if not security['outbound_network_enabled'] else 'allowed'}</span></span>
+        </div>
         <div class="hero-links">
           <a class="link-btn" href="/gallery">Open Gallery</a>
         </div>
@@ -918,6 +923,11 @@ async def status(request: Request) -> dict[str, Any]:
                 "derived_root": str(settings.derived_root),
                 "source_roots": [str(path) for path in settings.source_roots],
                 "database_url": settings.database_url,
+            },
+            "security": {
+                "offline_mode": settings.offline_mode,
+                "runtime_mode": "offline-local-only" if settings.offline_mode else "standard",
+                "outbound_network_enabled": not settings.offline_mode,
             },
             "catalog": pipeline_snapshot["media"],
             "jobs": {

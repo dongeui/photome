@@ -18,6 +18,10 @@ def get_caption_provider() -> CaptionProvider | None:
       - 'moondream' (default when set): use Moondream2 local model
       - unset / 'none': caption generation disabled
     """
+    if os.environ.get("PHOTOME_OFFLINE_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("caption provider disabled in offline mode")
+        return None
+
     provider_name = os.environ.get("PHOTOME_CAPTION_PROVIDER", "").strip().lower()
     if not provider_name or provider_name == "none":
         return None

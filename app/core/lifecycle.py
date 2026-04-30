@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: AppSettings = getattr(app.state, "settings", None) or load_settings()
     configure_logging(settings.log_level)
+    if settings.offline_mode:
+        import os
+
+        os.environ["PHOTOME_OFFLINE_MODE"] = "1"
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     clear_query_cache()
     invalidate_global_vector_index()
     database = build_database_state(settings)
@@ -57,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         FaceAnalysisService(
             FaceAnalysisConfig(
                 model_root=settings.model_root,
+                auto_download_models=not settings.offline_mode,
                 detection_score_threshold=settings.face_detection_score_threshold,
             )
         )
@@ -86,6 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         semantic_embedding_version=settings.semantic_embedding_version,
         semantic_auto_tag_version=settings.semantic_auto_tag_version,
         semantic_search_version=settings.semantic_search_version,
+        geocoding_enabled=False,
     )
     recovery = pipeline.recover_interrupted_library_jobs()
     scheduler = SchedulerService(settings, pipeline, database.session_factory)

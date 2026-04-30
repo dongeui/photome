@@ -17,6 +17,7 @@ from app.main import create_app
 from app.models.job import ProcessingJob
 from app.models.runtime import SchedulerRuntimeConfig
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
+from app.services.caption.registry import get_caption_provider
 from app.services.processing.incremental import IncrementalScanSummary
 
 
@@ -77,6 +78,36 @@ def test_search_finds_scanned_media_by_filename_and_semantic_rows_exist(
             text("SELECT file_id FROM search_documents_fts WHERE search_documents_fts MATCH 'receipt'")
         ).all()
         assert indexed == [(file_id,)]
+
+
+def test_offline_mode_disables_outbound_features(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    data_root = tmp_path / "data"
+    derived_root = tmp_path / "derived"
+    database_path = data_root / "photome.sqlite3"
+    source_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("PHOTOME_SOURCE_ROOTS", str(source_root))
+    monkeypatch.setenv("PHOTOME_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("PHOTOME_DERIVED_ROOT", str(derived_root))
+    monkeypatch.setenv("PHOTOME_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("PHOTOME_OFFLINE_MODE", "1")
+    monkeypatch.setenv("PHOTOME_CAPTION_PROVIDER", "moondream")
+    monkeypatch.setenv("PHOTOME_FACE_ANALYSIS_ENABLED", "1")
+    monkeypatch.setenv("PHOTOME_LOG_LEVEL", "ERROR")
+
+    settings = load_settings()
+    assert settings.offline_mode is True
+    assert get_caption_provider() is None
+
+    app = create_app(settings)
+    with TestClient(app) as test_client:
+        response = test_client.get("/status")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["security"]["offline_mode"] is True
+        assert payload["security"]["outbound_network_enabled"] is False
+        assert payload["security"]["runtime_mode"] == "offline-local-only"
 
 
 def test_semantic_maintenance_only_builds_missing_search_documents(

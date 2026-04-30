@@ -65,6 +65,7 @@ class AppSettings:
     server_port: int
     log_level: str
     reload: bool
+    offline_mode: bool
     data_root: Path
     source_roots: tuple[Path, ...]
     derived_root: Path
@@ -142,6 +143,7 @@ def load_settings() -> AppSettings:
         server_port=_env_int("PHOTOMINE_SERVER_PORT", 8000),
         log_level=_env("PHOTOMINE_LOG_LEVEL", "INFO").upper(),
         reload=_env_bool("PHOTOMINE_RELOAD", False),
+        offline_mode=_env_bool("PHOTOMINE_OFFLINE_MODE", False),
         data_root=data_root,
         source_roots=source_roots,
         derived_root=derived_root,

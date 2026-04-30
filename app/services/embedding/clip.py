@@ -50,6 +50,10 @@ def ensure_models() -> None:
     if is_ready():
         return
 
+    if os.environ.get("PHOTOME_OFFLINE_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
     _loading = True
     _load_error = None
     try:
