@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import math
@@ -14,6 +14,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.contracts import DerivedAssetKind, MediaFaceInput, MediaKind, MediaTagInput, ProcessingJobKind, ProcessingJobState
@@ -314,8 +315,12 @@ class ProcessingPipeline:
                 job.error_message = "Interrupted by restart. Run again to resume from current catalog state."
                 job.finished_at = now
                 job.result_json = payload
-            session.commit()
-            return {"recovered": len(interrupted)}
+            try:
+                session.commit()
+                return {"recovered": len(interrupted)}
+            except OperationalError:
+                session.rollback()
+                return {"recovered": 0, "skipped": len(interrupted), "reason": "database_locked"}
 
     def run_semantic_backfill(
         self,
@@ -1188,15 +1193,15 @@ class ProcessingPipeline:
         return {"status_counts": status_counts, "kind_counts": kind_counts}
 
     def _active_library_job(self, session: Session) -> dict[str, Any] | None:
-        job = session.execute(
+        jobs = session.execute(
             select(ProcessingJob)
             .where(
                 ProcessingJob.job_kind.in_(LIBRARY_JOB_KINDS),
                 ProcessingJob.status.in_((ProcessingJobState.QUEUED.value, ProcessingJobState.RUNNING.value)),
             )
             .order_by(ProcessingJob.enqueued_at.asc(), ProcessingJob.updated_at.asc())
-            .limit(1)
-        ).scalar_one_or_none()
+        ).scalars().all()
+        job = next((item for item in jobs if not self._is_stale_library_job(item)), None)
         if job is None:
             return None
         return {
@@ -1209,6 +1214,12 @@ class ProcessingPipeline:
             "enqueued_at": job.enqueued_at,
             "updated_at": job.updated_at,
         }
+
+    def _is_stale_library_job(self, job: ProcessingJob) -> bool:
+        reference = job.updated_at or job.started_at or job.enqueued_at
+        if reference is None:
+            return False
+        return reference < (datetime.utcnow() - STALE_LIBRARY_JOB_WINDOW)
 
     def _ensure_no_active_library_job(self, session: Session) -> None:
         active = self._active_library_job(session)
@@ -1298,6 +1309,7 @@ LIBRARY_JOB_KINDS = (
     ProcessingJobKind.SEMANTIC_BACKFILL.value,
     ProcessingJobKind.SEMANTIC_MAINTENANCE.value,
 )
+STALE_LIBRARY_JOB_WINDOW = timedelta(minutes=5)
 
 
 class LibraryJobBusyError(RuntimeError):
