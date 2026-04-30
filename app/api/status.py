@@ -522,17 +522,36 @@ async def dashboard(request: Request) -> HTMLResponse:
     const phase2StorageKey = "photome.dashboard.phase2.job";
     const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    function formatElapsed(startedAt, finishedAt) {{
+      if (!startedAt) return "";
+      const start = new Date(startedAt);
+      const end = finishedAt ? new Date(finishedAt) : new Date();
+      const seconds = Math.max(0, Math.floor((end - start) / 1000));
+      const minutes = Math.floor(seconds / 60);
+      const remain = seconds % 60;
+      return minutes > 0 ? `${{minutes}}m ${{remain}}s` : `${{remain}}s`;
+    }}
     function renderScanJob(job) {{
       const summary = job?.result?.summary || {{}};
       const processed = job?.result?.processed || {{}};
+      const progress = job?.result?.progress || {{}};
       const lines = [
         `status: ${{job?.status || "unknown"}}`,
       ];
       if (job?.status === "queued" || job?.status === "running") {{
+        if (progress.message) lines.push(progress.message);
         lines.push(`job: ${{job?.job_id || ""}}`);
-        if (job?.started_at) lines.push(`started: ${{job.started_at}}`);
+        if (progress.stage) lines.push(`stage: ${{progress.stage}}`);
+        if (progress.summary?.scanned !== undefined) lines.push(`scanned: ${{progress.summary.scanned}}`);
+        if (progress.processed?.total !== undefined) {{
+          lines.push(`assets: ${{progress.processed.current ?? 0}} / ${{progress.processed.total}}`);
+          lines.push(`assets ok: ${{progress.processed.succeeded ?? 0}}, failed: ${{progress.processed.failed ?? 0}}`);
+        }}
+        const elapsed = formatElapsed(job?.started_at, job?.finished_at);
+        if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
         return lines.join("\\n");
       }}
+      if (progress.message) lines.push(progress.message);
       lines.push(
         `scanned: ${{summary.scanned ?? 0}}`,
         `created: ${{summary.created ?? 0}}`,
@@ -542,16 +561,18 @@ async def dashboard(request: Request) -> HTMLResponse:
         `failed: ${{summary.failed ?? 0}}`,
         `processed: ${{processed.succeeded ?? 0}} succeeded, ${{processed.failed ?? 0}} failed`,
       );
+      const elapsed = formatElapsed(job?.started_at, job?.finished_at);
+      if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
       if (job?.error_message) lines.push(`error: ${{job.error_message}}`);
       return lines.join("\\n");
     }}
-    async function pollScanJob(jobId) {{
+    async function pollJob(jobId, resultNode, render) {{
       while (true) {{
         const response = await fetch(`/scan/jobs/${{encodeURIComponent(jobId)}}`, {{ cache: "no-store" }});
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
         const job = payload.job;
-        scanResult.textContent = renderScanJob(job);
+        resultNode.textContent = render(job);
         if (job.status !== "queued" && job.status !== "running") return job;
         await sleep(1200);
       }}
@@ -593,7 +614,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       button.disabled = true;
       result.textContent = "Reconnecting to running job...";
       try {{
-        const job = await pollScanJob(jobId);
+        const job = await pollJob(jobId, result, render);
         result.textContent = render(job);
         if (job.status !== "queued" && job.status !== "running") {{
           forgetJob(key);
@@ -608,19 +629,31 @@ async def dashboard(request: Request) -> HTMLResponse:
     }}
     function renderSemanticJob(job) {{
       const result = job?.result || {{}};
+      const progress = result.progress || {{}};
       const lines = [
         `status: ${{job?.status || "unknown"}}`,
       ];
       if (job?.status === "queued" || job?.status === "running") {{
+        if (progress.message) lines.push(progress.message);
         lines.push(`job: ${{job?.job_id || ""}}`);
-        if (job?.started_at) lines.push(`started: ${{job.started_at}}`);
+        if (progress.mode) lines.push(`mode: ${{progress.mode}}`);
+        if (progress.pending !== undefined) lines.push(`pending: ${{progress.pending}}`);
+        if (progress.current !== undefined) lines.push(`processed: ${{progress.current}} / ${{progress.pending ?? progress.current}}`);
+        if (progress.succeeded !== undefined || progress.failed !== undefined) {{
+          lines.push(`done: ${{progress.succeeded ?? 0}}, failed: ${{progress.failed ?? 0}}`);
+        }}
+        const elapsed = formatElapsed(job?.started_at, job?.finished_at);
+        if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
         return lines.join("\\n");
       }}
+      if (progress.message) lines.push(progress.message);
       lines.push(
         `pending: ${{result.pending ?? 0}}`,
         `succeeded: ${{result.succeeded ?? 0}}`,
         `failed: ${{result.failed ?? 0}}`,
       );
+      const elapsed = formatElapsed(job?.started_at, job?.finished_at);
+      if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
       if (result.has_more !== undefined) lines.push(`has_more: ${{result.has_more}}`);
       if (result.version) lines.push(`version: ${{result.version}}`);
       if (result.reason) lines.push(`reason: ${{result.reason}}`);
@@ -652,7 +685,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
         rememberJob(phase1StorageKey, payload.job.job_id);
         scanResult.textContent = renderScanJob(payload.job);
-        const job = await pollScanJob(payload.job.job_id);
+        const job = await pollJob(payload.job.job_id, scanResult, renderScanJob);
         scanResult.textContent = renderScanJob(job);
         if (job.status !== "queued" && job.status !== "running") {{
           forgetJob(phase1StorageKey);
@@ -682,7 +715,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
         rememberJob(phase2StorageKey, payload.job.job_id);
         semanticResult.textContent = renderSemanticJob(payload.job);
-        const job = await pollScanJob(payload.job.job_id);
+        const job = await pollJob(payload.job.job_id, semanticResult, renderSemanticJob);
         semanticResult.textContent = renderSemanticJob(job);
         if (job.status !== "queued" && job.status !== "running") {{
           forgetJob(phase2StorageKey);

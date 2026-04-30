@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 from threading import Lock
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -287,7 +287,12 @@ class ProcessingPipeline:
             session.commit()
             return self._to_summary(job)
 
-    def run_semantic_backfill(self, *, batch_size: int = 50) -> dict[str, Any]:
+    def run_semantic_backfill(
+        self,
+        *,
+        batch_size: int = 50,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Generate CLIP embeddings for media that were processed before CLIP was enabled."""
         if not self._semantic_clip_enabled:
             return {"skipped": True, "reason": "clip_disabled", "pending": 0, "succeeded": 0, "failed": 0}
@@ -298,7 +303,17 @@ class ProcessingPipeline:
             semantic_catalog = SemanticCatalog(session)
             succeeded = failed = 0
 
-            for media_file in pending:
+            if progress_callback is not None:
+                progress_callback({
+                    "mode": "backfill",
+                    "pending": len(pending),
+                    "current": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "batch_size": batch_size,
+                })
+
+            for index, media_file in enumerate(pending, start=1):
                 try:
                     embedding_result = self._materialize_clip_embedding(media_file)
                     if embedding_result:
@@ -339,6 +354,16 @@ class ProcessingPipeline:
                     )
                     failed += 1
 
+                if progress_callback is not None and (index == 1 or index == len(pending) or index % 25 == 0):
+                    progress_callback({
+                        "mode": "backfill",
+                        "pending": len(pending),
+                        "current": index,
+                        "succeeded": succeeded,
+                        "failed": failed,
+                        "batch_size": batch_size,
+                    })
+
             session.commit()
             return {
                 "skipped": False,
@@ -348,7 +373,12 @@ class ProcessingPipeline:
                 "has_more": len(pending) == batch_size,
             }
 
-    def run_semantic_maintenance(self, *, batch_size: int = 100) -> dict[str, Any]:
+    def run_semantic_maintenance(
+        self,
+        *,
+        batch_size: int = 100,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Refresh Phase 2 search documents only for media that need it.
 
         The scheduler calls this in cycles. A non-blocking lock prevents two
@@ -365,7 +395,17 @@ class ProcessingPipeline:
                     limit=batch_size,
                 )
                 succeeded = failed = 0
-                for media_file in pending:
+                if progress_callback is not None:
+                    progress_callback({
+                        "mode": "maintenance",
+                        "pending": len(pending),
+                        "current": 0,
+                        "succeeded": 0,
+                        "failed": 0,
+                        "batch_size": batch_size,
+                    })
+
+                for index, media_file in enumerate(pending, start=1):
                     try:
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
                         succeeded += 1
@@ -375,6 +415,16 @@ class ProcessingPipeline:
                             extra={"file_id": media_file.file_id, "error": str(exc)},
                         )
                         failed += 1
+
+                    if progress_callback is not None and (index == 1 or index == len(pending) or index % 25 == 0):
+                        progress_callback({
+                            "mode": "maintenance",
+                            "pending": len(pending),
+                            "current": index,
+                            "succeeded": succeeded,
+                            "failed": failed,
+                            "batch_size": batch_size,
+                        })
 
                 session.commit()
 
@@ -414,13 +464,38 @@ class ProcessingPipeline:
         job.attempts = (job.attempts or 0) + 1
         job.error_stage = None
         job.error_message = None
+        self._set_job_progress(
+            session,
+            job,
+            stage="collecting",
+            message="Collecting semantic work items.",
+            details={"mode": mode, "batch_size": batch_size},
+        )
         session.flush()
 
         try:
             if mode == "backfill":
-                result = self.run_semantic_backfill(batch_size=batch_size)
+                result = self.run_semantic_backfill(
+                    batch_size=batch_size,
+                    progress_callback=lambda payload: self._set_job_progress(
+                        session,
+                        job,
+                        stage="processing",
+                        message="Generating semantic features.",
+                        details=payload,
+                    ),
+                )
             elif mode == "maintenance":
-                result = self.run_semantic_maintenance(batch_size=batch_size)
+                result = self.run_semantic_maintenance(
+                    batch_size=batch_size,
+                    progress_callback=lambda payload: self._set_job_progress(
+                        session,
+                        job,
+                        stage="processing",
+                        message="Refreshing search documents.",
+                        details=payload,
+                    ),
+                )
             else:
                 raise ValueError(f"Unknown semantic job mode: {mode}")
         except Exception as exc:
@@ -433,7 +508,16 @@ class ProcessingPipeline:
             raise
 
         job.status = ProcessingJobState.SUCCEEDED.value
-        job.result_json = result
+        job.result_json = dict(result)
+        job.result_json["progress"] = {
+            "stage": "complete",
+            "message": "Semantic job complete.",
+            "mode": mode,
+            "batch_size": batch_size,
+            "pending": result.get("pending", 0),
+            "succeeded": result.get("succeeded", 0),
+            "failed": result.get("failed", 0),
+        }
         job.finished_at = datetime.utcnow()
         session.flush()
         return result
@@ -469,6 +553,16 @@ class ProcessingPipeline:
         job.attempts = (job.attempts or 0) + 1
         job.error_stage = None
         job.error_message = None
+        self._set_job_progress(
+            session,
+            job,
+            stage="scanning",
+            message="Scanning source roots.",
+            details={
+                "full_scan": full_scan,
+                "source_roots": [str(path) for path in source_roots] if source_roots is not None else None,
+            },
+        )
         session.flush()
 
         try:
@@ -478,7 +572,18 @@ class ProcessingPipeline:
                 self._fingerprint_service,
                 self._metadata_service,
             ).run(session)
-            processed_summary = self._process_pending_media(session, trigger_job_id=job.id)
+            self._set_job_progress(
+                session,
+                job,
+                stage="processing_assets",
+                message="Refreshing thumbnails and semantic assets.",
+                details={
+                    "full_scan": full_scan,
+                    "source_roots": [str(path) for path in source_roots] if source_roots is not None else None,
+                    "summary": asdict(scan_summary),
+                },
+            )
+            processed_summary = self._process_pending_media(session, trigger_job_id=job.id, parent_job=job)
         except Exception as exc:
             logger.exception("scan job failed", extra={"job_id": job.id})
             job.status = ProcessingJobState.FAILED.value
@@ -494,17 +599,40 @@ class ProcessingPipeline:
             "source_roots": [str(path) for path in source_roots] if source_roots is not None else None,
             "summary": asdict(scan_summary),
             "processed": processed_summary,
+            "progress": {
+                "stage": "complete",
+                "message": "Scan complete.",
+                "summary": asdict(scan_summary),
+                "processed": processed_summary,
+            },
         }
         job.finished_at = datetime.utcnow()
         return scan_summary
 
-    def _process_pending_media(self, session: Session, *, trigger_job_id: str) -> dict[str, Any]:
+    def _process_pending_media(self, session: Session, *, trigger_job_id: str, parent_job: ProcessingJob | None = None) -> dict[str, Any]:
         catalog = MediaCatalog(session)
         pending_media = catalog.list_media_for_processing()
         succeeded = 0
         failed = 0
+        total = len(pending_media)
 
-        for media_file in pending_media:
+        if parent_job is not None:
+            self._set_job_progress(
+                session,
+                parent_job,
+                stage="processing_assets",
+                message="Preparing derived assets.",
+                details={
+                    "processed": {
+                        "current": 0,
+                        "total": total,
+                        "succeeded": 0,
+                        "failed": 0,
+                    }
+                },
+            )
+
+        for index, media_file in enumerate(pending_media, start=1):
             job = ProcessingJob(
                 job_kind=ProcessingJobKind.PIPELINE.value,
                 status=ProcessingJobState.RUNNING.value,
@@ -530,12 +658,46 @@ class ProcessingPipeline:
                 job.finished_at = datetime.utcnow()
                 failed += 1
 
+            if parent_job is not None and (index == 1 or index == total or index % 25 == 0):
+                self._set_job_progress(
+                    session,
+                    parent_job,
+                    stage="processing_assets",
+                    message="Refreshing thumbnails and semantic assets.",
+                    details={
+                        "processed": {
+                            "current": index,
+                            "total": total,
+                            "succeeded": succeeded,
+                            "failed": failed,
+                        }
+                    },
+                )
+
         session.flush()
         return {
             "pending": len(pending_media),
             "succeeded": succeeded,
             "failed": failed,
         }
+
+    def _set_job_progress(
+        self,
+        session: Session,
+        job: ProcessingJob,
+        *,
+        stage: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        current = dict(job.result_json or {})
+        current["progress"] = {
+            "stage": stage,
+            "message": message,
+            **(details or {}),
+        }
+        job.result_json = current
+        session.flush()
 
     def _refresh_media_assets(self, session: Session, media_file: MediaFile) -> dict[str, Any]:
         catalog = MediaCatalog(session)
