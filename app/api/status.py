@@ -420,7 +420,6 @@ async def dashboard(request: Request) -> HTMLResponse:
           </label>
           <div class="scan-actions">
             <button type="submit" id="phase1-scan-button">Run Phase 1 Scan</button>
-            <label><input type="checkbox" id="phase1-full-scan" name="full_scan"> Full scan</label>
           </div>
           <pre class="scan-result" id="phase1-scan-result" aria-live="polite"></pre>
         </form>
@@ -723,10 +722,9 @@ async def dashboard(request: Request) -> HTMLResponse:
       updateLibraryJobGuards();
       const sourceRoots = sourceRootsField ? sourceRootsField.value : "";
       rememberText(phase1SourceRootsStorageKey, sourceRoots);
-      const fullScan = document.getElementById("phase1-full-scan").checked;
       const params = new URLSearchParams();
       if (sourceRoots.trim()) params.set("source_roots", sourceRoots);
-      if (fullScan) params.set("full_scan", "true");
+      params.set("full_scan", "true");
       try {{
         const response = await fetch(`/scan/async?${{params.toString()}}`, {{ method: "POST" }});
         const payload = await response.json();

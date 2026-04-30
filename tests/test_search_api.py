@@ -316,6 +316,8 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
     assert "let activeLibraryJob =" in html
     assert "function updateLibraryJobGuards()" in html
     assert "setInterval(refreshDashboardStatus, 3000);" in html
+    assert 'id="phase1-full-scan"' not in html
+    assert 'params.set("full_scan", "true");' in html
     assert "function formatElapsed(startedAt, finishedAt)" in html
     assert "async function pollJob(jobId, resultNode, render)" in html
     assert "if (progress.message) lines.push(progress.message);" in html
