@@ -31,7 +31,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     health = payload["health"]
     source_roots = payload["storage"]["source_roots"]
     source_roots_text = escape("\n".join(source_roots))
-    active_library_job_json = json.dumps(jobs.get("active_library_job"))
+    active_library_job_json = json.dumps(jobs.get("active_library_job"), default=str)
 
     html = f"""<!doctype html>
 <html lang="en">
