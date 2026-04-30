@@ -87,6 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         semantic_auto_tag_version=settings.semantic_auto_tag_version,
         semantic_search_version=settings.semantic_search_version,
     )
+    recovery = pipeline.recover_interrupted_library_jobs()
     scheduler = SchedulerService(settings, pipeline)
 
     app.state.settings = settings
@@ -110,6 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "version": settings.app_version,
             "data_root": str(settings.data_root),
             "database_configured": database.configured,
+            "recovered_library_jobs": recovery.get("recovered", 0),
         },
     )
 

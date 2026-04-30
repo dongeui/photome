@@ -290,6 +290,33 @@ class ProcessingPipeline:
             session.commit()
             return self._to_summary(job)
 
+    def recover_interrupted_library_jobs(self) -> dict[str, int]:
+        with self._session_factory() as session:
+            interrupted = session.execute(
+                select(ProcessingJob).where(
+                    ProcessingJob.job_kind.in_(LIBRARY_JOB_KINDS),
+                    ProcessingJob.status.in_((ProcessingJobState.QUEUED.value, ProcessingJobState.RUNNING.value)),
+                )
+            ).scalars().all()
+            if not interrupted:
+                return {"recovered": 0}
+
+            now = datetime.utcnow()
+            for job in interrupted:
+                payload = dict(job.result_json or {})
+                payload["progress"] = {
+                    "stage": "interrupted",
+                    "message": "Interrupted by restart. Run again to resume from current catalog state.",
+                    "resume_supported": True,
+                }
+                job.status = ProcessingJobState.CANCELED.value
+                job.error_stage = "interrupted"
+                job.error_message = "Interrupted by restart. Run again to resume from current catalog state."
+                job.finished_at = now
+                job.result_json = payload
+            session.commit()
+            return {"recovered": len(interrupted)}
+
     def run_semantic_backfill(
         self,
         *,

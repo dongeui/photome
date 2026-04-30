@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy import func, select, text
 
 from app.core.settings import load_settings
+from app.db.bootstrap import build_database_state
 from app.main import create_app
 from app.models.job import ProcessingJob
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
@@ -375,6 +376,48 @@ def test_phase1_async_is_blocked_while_phase2_job_is_active(client: TestClient) 
 
     assert response.status_code == 409
     assert "Phase 2 semantic work is already active" in response.json()["detail"]
+
+
+def test_startup_recovers_interrupted_library_jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir(parents=True, exist_ok=True)
+    data_root = tmp_path / "data"
+    derived_root = tmp_path / "derived"
+    database_path = data_root / "photome.sqlite3"
+
+    monkeypatch.setenv("PHOTOME_SOURCE_ROOTS", str(source_root))
+    monkeypatch.setenv("PHOTOME_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("PHOTOME_DERIVED_ROOT", str(derived_root))
+    monkeypatch.setenv("PHOTOME_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("PHOTOME_STABILITY_WINDOW_SECONDS", "1")
+    monkeypatch.setenv("PHOTOME_SCHEDULER_ENABLED", "0")
+    monkeypatch.setenv("PHOTOME_FACE_ANALYSIS_ENABLED", "0")
+    monkeypatch.setenv("PHOTOME_CLIP_ENABLED", "0")
+    monkeypatch.setenv("PHOTOME_LOG_LEVEL", "ERROR")
+
+    settings = load_settings()
+    database = build_database_state(settings)
+    with database.session_factory() as session:
+        job = ProcessingJob(
+            job_kind="scan",
+            status="running",
+            payload_json={"source_roots": [str(source_root)]},
+            attempts=1,
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    app = create_app(settings)
+    with TestClient(app) as test_client:
+        status_payload = test_client.get("/status").json()
+        assert status_payload["jobs"]["active_library_job"] is None
+        with test_client.app.state.database.session_factory() as session:
+            recovered = session.get(ProcessingJob, job_id)
+            assert recovered is not None
+            assert recovered.status == "canceled"
+            assert recovered.error_stage == "interrupted"
+            assert recovered.result_json["progress"]["resume_supported"] is True
 
 
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:
