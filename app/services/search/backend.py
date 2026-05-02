@@ -146,7 +146,7 @@ class SqlAlchemyHybridSearchBackend:
             .join(MediaOCR, MediaOCR.file_id == MediaFile.file_id)
             .outerjoin(MediaAnalysisSignal, MediaAnalysisSignal.file_id == MediaFile.file_id)
             .where(MediaFile.status != "missing")
-            .where(func.lower(MediaOCR.text_content).like(pattern))
+            .where(func.lower(MediaOCR.text_content).like(pattern, escape=_LIKE_ESCAPE))
             .order_by(MediaFile.exif_datetime.desc().nullslast(), MediaFile.updated_at.desc())
             .limit(max(1, limit * 4))
         )
@@ -234,13 +234,13 @@ class SqlAlchemyHybridSearchBackend:
             .where(MediaFile.status != "missing")
             .where(
                 or_(
-                    func.lower(MediaFile.filename).like(pattern),
-                    func.lower(MediaFile.current_path).like(pattern),
-                    func.lower(MediaFile.relative_path).like(pattern),
-                    func.lower(MediaAnnotation.title).like(pattern),
-                    func.lower(MediaAnnotation.description).like(pattern),
-                    func.lower(Tag.tag_value).like(pattern),
-                    func.lower(MediaOCR.text_content).like(pattern),
+                    func.lower(MediaFile.filename).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(MediaFile.current_path).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(MediaFile.relative_path).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(MediaAnnotation.title).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(MediaAnnotation.description).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(Tag.tag_value).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(MediaOCR.text_content).like(pattern, escape=_LIKE_ESCAPE),
                 )
             )
             .group_by(MediaFile.file_id)
@@ -275,9 +275,9 @@ class SqlAlchemyHybridSearchBackend:
             .where(MediaFile.status != "missing")
             .where(
                 or_(
-                    func.lower(SearchDocument.search_text).like(pattern),
-                    func.lower(SearchDocument.keyword_text).like(pattern),
-                    func.lower(SearchDocument.semantic_text).like(pattern),
+                    func.lower(SearchDocument.search_text).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(SearchDocument.keyword_text).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(SearchDocument.semantic_text).like(pattern, escape=_LIKE_ESCAPE),
                 )
             )
             .order_by(MediaFile.exif_datetime.desc().nullslast(), MediaFile.updated_at.desc())
@@ -615,7 +615,7 @@ class SqlAlchemyHybridSearchBackend:
             .where(
                 or_(
                     func.lower(Tag.tag_value).in_(list(candidates)),
-                    func.lower(Tag.tag_value).like(pattern),
+                    func.lower(Tag.tag_value).like(pattern, escape=_LIKE_ESCAPE),
                 )
             )
             .group_by(Tag.tag_value)
@@ -755,8 +755,13 @@ class SqlAlchemyHybridSearchBackend:
         )
 
 
+_LIKE_ESCAPE = "\\"
+
+
 def _like_pattern(query: str) -> str:
-    return f"%{query.casefold().strip()}%"
+    cleaned = query.casefold().strip()
+    escaped = cleaned.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2).replace("%", r"\%").replace("_", r"\_")
+    return f"%{escaped}%"
 
 
 def _fts_query(query: str) -> str:
