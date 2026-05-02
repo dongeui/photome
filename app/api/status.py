@@ -16,6 +16,7 @@ from app.api.deps import require_state
 from app.api.serializers import serialize_scheduler_snapshot
 from app.core.settings import AppSettings
 from app.services.analysis.opencv_zoo import SFACE_MODEL, YU_NET_MODEL, _is_valid_model_file
+from app.services.embedding import clip as clip_embedding
 from app.services.processing.registry import MediaCatalog
 from app.models.job import ProcessingJob
 from app.models.semantic import SearchDocument
@@ -38,6 +39,8 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
     cache_key = (
         settings.offline_mode,
         settings.semantic_clip_enabled,
+        settings.semantic_clip_model_name,
+        settings.semantic_clip_pretrained,
         str(model_root),
     )
     now = datetime.utcnow()
@@ -49,6 +52,22 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
     detector_path = model_root / YU_NET_MODEL.relative_path
     recognizer_path = model_root / SFACE_MODEL.relative_path
     face_models_ready = _is_valid_model_file(detector_path) and _is_valid_model_file(recognizer_path)
+    clip_status = clip_embedding.status()
+    clip_dependencies = clip_status.get("dependencies") or {}
+    clip_dependency_ready = all(
+        clip_dependencies.get(name) == "installed"
+        for name in ("open_clip_torch", "torch", "torchvision")
+    )
+    if not settings.semantic_clip_enabled:
+        clip_state = "disabled"
+    elif not clip_dependency_ready:
+        clip_state = "missing-local-ai-pack"
+    elif clip_status.get("model_ready"):
+        clip_state = "ready"
+    elif settings.offline_mode:
+        clip_state = "local-cache-required"
+    else:
+        clip_state = "online-preparation-required"
     disabled_features: list[str] = []
     if settings.offline_mode:
         disabled_features.extend(
@@ -82,8 +101,13 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
             },
             {
                 "name": "CLIP semantic embedding",
-                "state": "disabled" if not settings.semantic_clip_enabled else "local-cache-required",
-                "detail": "Uses only cached local model files in offline mode.",
+                "state": clip_state,
+                "detail": (
+                    f"{settings.semantic_clip_model_name}/{settings.semantic_clip_pretrained}; "
+                    "base app works without this optional local AI pack."
+                ),
+                "dependencies": clip_dependencies,
+                "cache": clip_status.get("cache") or {},
             },
             {
                 "name": "Face analysis models",

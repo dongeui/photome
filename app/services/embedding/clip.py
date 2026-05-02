@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import struct
+from importlib.util import find_spec
 
 import numpy as np
 
@@ -16,6 +17,23 @@ _preprocess = None
 _tokenizer = None
 _loading = False
 _load_error: str | None = None
+
+
+def model_config() -> dict[str, str]:
+    model_name = os.environ.get("PHOTOME_CLIP_MODEL_NAME") or os.environ.get("PHOTOMINE_CLIP_MODEL_NAME") or "ViT-B-32"
+    pretrained = os.environ.get("PHOTOME_CLIP_PRETRAINED") or os.environ.get("PHOTOMINE_CLIP_PRETRAINED") or "openai"
+    return {
+        "model_name": model_name,
+        "pretrained": pretrained,
+    }
+
+
+def dependency_status() -> dict:
+    return {
+        "open_clip_torch": "installed" if find_spec("open_clip") is not None else "missing",
+        "torch": "installed" if find_spec("torch") is not None else "missing",
+        "torchvision": "installed" if find_spec("torchvision") is not None else "missing",
+    }
 
 
 def _configure_torch_threads() -> None:
@@ -41,6 +59,14 @@ def status() -> dict:
         "model_ready": is_ready(),
         "model_loading": _loading,
         "model_error": _load_error,
+        "config": model_config(),
+        "dependencies": dependency_status(),
+        "cache": {
+            "hf_home": os.environ.get("HF_HOME"),
+            "torch_home": os.environ.get("TORCH_HOME"),
+            "hf_hub_offline": os.environ.get("HF_HUB_OFFLINE"),
+            "transformers_offline": os.environ.get("TRANSFORMERS_OFFLINE"),
+        },
     }
 
 
@@ -60,14 +86,18 @@ def ensure_models() -> None:
         import open_clip
         _configure_torch_threads()
 
-        print("[photome] Loading CLIP model (downloads ~350MB on first run) ...", flush=True)
+        config = model_config()
+        print(
+            f"[photome] Loading CLIP model {config['model_name']} / {config['pretrained']} ...",
+            flush=True,
+        )
         _model, _, _preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="openai"
+            config["model_name"], pretrained=config["pretrained"]
         )
         _model.eval()
         for p in _model.parameters():
             p.requires_grad_(False)
-        _tokenizer = open_clip.get_tokenizer("ViT-B-32")
+        _tokenizer = open_clip.get_tokenizer(config["model_name"])
         print("[photome] Model ready.", flush=True)
     except Exception as exc:
         _load_error = str(exc)

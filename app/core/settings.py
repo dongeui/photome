@@ -83,6 +83,8 @@ class AppSettings:
     semantic_scheduler_interval_seconds: int
     semantic_ocr_enabled: bool
     semantic_clip_enabled: bool
+    semantic_clip_model_name: str
+    semantic_clip_pretrained: str
     face_analysis_enabled: bool
     face_detection_score_threshold: float
     face_match_threshold: float
@@ -161,6 +163,8 @@ def load_settings() -> AppSettings:
         semantic_scheduler_interval_seconds=_env_int("PHOTOMINE_SEMANTIC_SCHEDULER_INTERVAL_SECONDS", 600),
         semantic_ocr_enabled=_env_bool("PHOTOMINE_OCR_ENABLED", True),
         semantic_clip_enabled=_env_bool("PHOTOMINE_CLIP_ENABLED", False),
+        semantic_clip_model_name=_env("PHOTOMINE_CLIP_MODEL_NAME", "ViT-B-32"),
+        semantic_clip_pretrained=_env("PHOTOMINE_CLIP_PRETRAINED", "openai"),
         face_analysis_enabled=_env_bool("PHOTOMINE_FACE_ANALYSIS_ENABLED", True),
         face_detection_score_threshold=_env_float("PHOTOMINE_FACE_DETECTION_SCORE_THRESHOLD", 0.8),
         face_match_threshold=_env_float("PHOTOMINE_FACE_MATCH_THRESHOLD", 0.363),

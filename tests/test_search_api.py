@@ -143,6 +143,42 @@ def test_offline_mode_disables_outbound_features(monkeypatch: pytest.MonkeyPatch
         assert states["Caption provider"] == "disabled"
 
 
+def test_clip_status_degrades_when_local_ai_pack_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    data_root = tmp_path / "data"
+    derived_root = tmp_path / "derived"
+    database_path = data_root / "photome.sqlite3"
+    source_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("PHOTOME_SOURCE_ROOTS", str(source_root))
+    monkeypatch.setenv("PHOTOME_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("PHOTOME_DERIVED_ROOT", str(derived_root))
+    monkeypatch.setenv("PHOTOME_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("PHOTOME_CLIP_ENABLED", "1")
+    monkeypatch.setenv("PHOTOME_LOG_LEVEL", "ERROR")
+
+    from app.services.embedding import clip as clip_embedding
+
+    monkeypatch.setattr(
+        clip_embedding,
+        "dependency_status",
+        lambda: {"open_clip_torch": "missing", "torch": "missing", "torchvision": "missing"},
+    )
+
+    app = create_app(load_settings())
+    with TestClient(app) as test_client:
+        response = test_client.get("/status")
+
+    assert response.status_code == 200
+    states = {item["name"]: item for item in response.json()["security"]["local_dependencies"]}
+    clip_state = states["CLIP semantic embedding"]
+    assert clip_state["state"] == "missing-local-ai-pack"
+    assert clip_state["dependencies"]["open_clip_torch"] == "missing"
+
+
 def test_semantic_maintenance_only_builds_missing_search_documents(
     client: TestClient,
     source_root: Path,
