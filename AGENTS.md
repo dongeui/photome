@@ -41,6 +41,21 @@ NAS 원본 미디어를 읽기 전용으로 인덱싱하고, 서버 호스트에
 5. cache와 derived asset은 전부 재생성 가능해야 한다.
 6. NAS 오프라인, 파일 이동/이름변경, partial upload를 정상 시나리오로 취급한다.
 7. 경로 변경이 메타데이터 연결을 깨뜨리면 안 된다.
+8. 배포는 항상 `photome-base`와 optional `photome-local-ai-pack` 두 경로를 모두 고려한다.
+9. base 앱은 local AI pack, CLIP/OpenCLIP weight, PyTorch extra가 없어도 scan/gallery/status/search 기본 기능이 동작해야 한다.
+10. local AI 기능은 설치되어 있을 때만 활성화하며, 오프라인 모드에서는 모델 다운로드를 시도하면 안 된다.
+
+## 배포 호환성 개발 원칙
+
+- 기능을 추가할 때마다 아래 두 경우를 함께 검토한다.
+  - `photome-base`: 모델팩 없음, `PHOTOME_CLIP_ENABLED=0`, 기본 검색/스캔이 동작해야 함.
+  - `photome-local-ai-pack`: 모델팩 있음, `PHOTOME_CLIP_ENABLED=1`, 오프라인 캐시 기반 CLIP/semantic 검색이 동작해야 함.
+- CLIP/PyTorch/open_clip import는 optional path에 격리한다. base runtime import 단계에서 해당 패키지가 없어도 실패하면 안 된다.
+- 모델 캐시가 없거나 offline mode인 경우 실패 대신 `skipped`/`missing` 상태를 기록하고 UI/status에 노출한다.
+- 모델/provider/dimensions 변경은 `semantic_embedding_version` 변경 대상이다.
+- concept threshold/alias 변경은 `semantic_auto_tag_version` 변경 대상이다.
+- `search_documents` 구성 변경은 `semantic_search_version` 변경 대상이다.
+- 배포 정책 변경은 `docs/ops/PACKAGING_STRATEGY.md`, 운영 대응은 `docs/ops/RUNBOOK.md`에 반영한다.
 
 ## 핵심 문서
 
@@ -52,6 +67,7 @@ NAS 원본 미디어를 읽기 전용으로 인덱싱하고, 서버 호스트에
 - `docs/qa/SCENARIO_VALIDATION_MATRIX.md`
 - `docs/integrations/GITHUB_AGENT_WEBHOOKS.md`
 - `docs/ops/RUNBOOK.md`
+- `docs/ops/PACKAGING_STRATEGY.md`
 - `AGENTS_LIGHT.md`
 - `.codex/context/ALL_TASKS.md`
 

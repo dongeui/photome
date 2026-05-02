@@ -26,6 +26,11 @@
 - `allowed_scope` 밖 파일이 필요하면 경로와 이유를 먼저 적는다.
 - 구현 중 repo-wide scan 금지.
 - Developer는 `app/**`만, QA는 `tests/**`만, Planner는 `docs/**`만 다룬다.
+- 모든 개발/리뷰는 두 배포 경로를 확인한다:
+  - `photome-base`: local AI pack 없이 기본 scan/gallery/status/search가 동작
+  - `photome-local-ai-pack`: 모델 캐시 기반 CLIP/semantic 검색이 오프라인에서도 동작
+- base runtime에서 PyTorch/open_clip/모델 weight가 필수 import가 되면 안 된다.
+- 모델/provider 변경은 embedding version, concept/alias 변경은 auto tag version, search document 변경은 search version 검토 대상이다.
 
 ## Model Profile
 

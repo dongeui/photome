@@ -14,6 +14,10 @@
   - 대신 DB 기반(TagVocabularyCache), 형태소 분석(KoNLPy), 또는 설정 파일로 해결한다.
 - 특정 단어·목록이 필요하면 "왜 동적으로 못 하는가"를 먼저 검토한다.
 - 범용·공통 개선에 집중하고, 케이스별 패치는 지양한다.
+- 모든 기능 개발은 `photome-base`와 `photome-local-ai-pack` 두 배포 경로를 함께 검토한다.
+- base 배포는 PyTorch/open_clip/model weight 없이도 import/startup/scan/gallery/status/search가 동작해야 한다.
+- local-ai-pack 배포는 모델 캐시 기반으로 CLIP/semantic 검색이 오프라인에서 동작해야 하며, offline mode에서 다운로드를 시도하면 안 된다.
+- 모델/provider/dimensions 변경은 embedding version, concept/alias 변경은 auto tag version, search document 구성 변경은 search version 변경을 검토한다.
 
 ## 개선 계획 방식
 
