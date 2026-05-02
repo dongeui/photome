@@ -11,6 +11,8 @@ from fastapi.responses import HTMLResponse
 
 from app.api.deps import require_state
 from app.api.serializers import serialize_scheduler_snapshot
+from app.core.settings import AppSettings
+from app.services.analysis.opencv_zoo import SFACE_MODEL, YU_NET_MODEL, _is_valid_model_file
 from app.services.processing.registry import MediaCatalog
 from app.models.job import ProcessingJob
 from app.models.semantic import SearchDocument
@@ -23,6 +25,46 @@ router = APIRouter(tags=["status"])
 
 def _schedule_label(hours: int | None) -> str:
     return "None" if hours is None else f"{hours}h"
+
+
+def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
+    model_root = settings.model_root
+    detector_path = model_root / YU_NET_MODEL.relative_path
+    recognizer_path = model_root / SFACE_MODEL.relative_path
+    face_models_ready = _is_valid_model_file(detector_path) and _is_valid_model_file(recognizer_path)
+    disabled_features: list[str] = []
+    if settings.offline_mode:
+        disabled_features.extend(
+            [
+                "Reverse geocoding is blocked.",
+                "Caption generation is disabled.",
+                "Automatic model downloads are blocked.",
+            ]
+        )
+
+    return {
+        "offline_mode": settings.offline_mode,
+        "runtime_mode": "offline-local-only" if settings.offline_mode else "standard",
+        "outbound_network_enabled": not settings.offline_mode,
+        "disabled_features": disabled_features,
+        "local_dependencies": [
+            {
+                "name": "CLIP semantic embedding",
+                "state": "disabled" if not settings.semantic_clip_enabled else "local-cache-required",
+                "detail": "Uses only cached local model files in offline mode.",
+            },
+            {
+                "name": "Face analysis models",
+                "state": "ready" if face_models_ready else "missing-local-models",
+                "detail": str(detector_path.parent),
+            },
+            {
+                "name": "Caption provider",
+                "state": "disabled" if settings.offline_mode else "optional",
+                "detail": "Moondream captioning is blocked in offline-local-only mode.",
+            },
+        ],
+    }
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -489,6 +531,19 @@ async def dashboard(request: Request) -> HTMLResponse:
       </article>
 
       <article class="card full">
+        <h2>Offline Security</h2>
+        <p class="sub">Local-only runtime guardrails and model prerequisites.</p>
+        <div class="pill-row">
+          <span class="pill"><strong>Mode</strong> {escape(security["runtime_mode"])}</span>
+          <span class="pill"><strong>Network</strong> <span class="{'status-ok' if not security['outbound_network_enabled'] else 'status-warn'}">{'blocked' if not security['outbound_network_enabled'] else 'allowed'}</span></span>
+        </div>
+        <div class="list" style="margin-top:14px;">
+          {''.join(f'<div class="row"><span>{escape(item["name"])}</span><span>{escape(item["state"])}</span></div>' for item in security["local_dependencies"])}
+          {''.join(f'<div class="row"><span>Blocked</span><span>{escape(item)}</span></div>' for item in security["disabled_features"])}
+        </div>
+      </article>
+
+      <article class="card full">
         <h2>Source and Storage</h2>
         <p class="sub">Native local runtime with localhost web UI, reading originals from NAS and writing rebuildable derived data locally.</p>
         <div class="list">
@@ -924,11 +979,7 @@ async def status(request: Request) -> dict[str, Any]:
                 "source_roots": [str(path) for path in settings.source_roots],
                 "database_url": settings.database_url,
             },
-            "security": {
-                "offline_mode": settings.offline_mode,
-                "runtime_mode": "offline-local-only" if settings.offline_mode else "standard",
-                "outbound_network_enabled": not settings.offline_mode,
-            },
+            "security": _security_snapshot(settings),
             "catalog": pipeline_snapshot["media"],
             "jobs": {
                 **pipeline_snapshot["jobs"],

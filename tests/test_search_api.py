@@ -108,6 +108,11 @@ def test_offline_mode_disables_outbound_features(monkeypatch: pytest.MonkeyPatch
         assert payload["security"]["offline_mode"] is True
         assert payload["security"]["outbound_network_enabled"] is False
         assert payload["security"]["runtime_mode"] == "offline-local-only"
+        assert "Reverse geocoding is blocked." in payload["security"]["disabled_features"]
+        assert "Caption generation is disabled." in payload["security"]["disabled_features"]
+        states = {item["name"]: item["state"] for item in payload["security"]["local_dependencies"]}
+        assert states["CLIP semantic embedding"] == "disabled"
+        assert states["Caption provider"] == "disabled"
 
 
 def test_semantic_maintenance_only_builds_missing_search_documents(
@@ -352,6 +357,7 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
     assert "setInterval(refreshDashboardStatus, 3000);" in html
     assert 'id="phase1-schedule-button"' in html
     assert 'id="phase2-schedule-button"' in html
+    assert "Offline Security" in html
     assert 'id="phase1-full-scan"' not in html
     assert 'params.set("full_scan", "true");' in html
     assert "function formatElapsed(startedAt, finishedAt)" in html
