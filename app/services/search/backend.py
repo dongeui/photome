@@ -302,8 +302,6 @@ class SqlAlchemyHybridSearchBackend:
         return results[:limit]
 
     def _search_by_fts_document(self, query: str, *, limit: int) -> list[dict]:
-        if self._session.bind is None or self._session.bind.dialect.name != "sqlite":
-            return []
         fts_query = _fts_query(query)
         if not fts_query:
             return []
