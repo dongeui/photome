@@ -598,9 +598,9 @@ class SqlAlchemyHybridSearchBackend:
         Used to populate "did you mean?" suggestions when a search returns
         no results.
         """
-        if not query.strip():
-            return []
         lowered = query.casefold().strip()
+        if len(lowered) < 2:
+            return []
         # Collect synonyms as candidate values to look for
         candidates = {lowered} | TAG_SYNONYMS.get(lowered, set())
         for token in lowered.split():
