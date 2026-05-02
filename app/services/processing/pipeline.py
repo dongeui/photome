@@ -8,6 +8,7 @@ import json
 import logging
 import math
 from pathlib import Path
+from shutil import which
 from threading import Lock
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable
@@ -578,6 +579,10 @@ class ProcessingPipeline:
                 },
             }
 
+    def has_active_library_job(self) -> bool:
+        with self._session_factory() as session:
+            return self._active_library_job(session) is not None
+
     def _run_scan_job(
         self,
         session: Session,
@@ -675,6 +680,7 @@ class ProcessingPipeline:
             session.commit()
 
         for index, media_file in enumerate(pending_media, start=1):
+            should_commit_progress = index == 1 or index == total or index % 25 == 0
             job = ProcessingJob(
                 job_kind=ProcessingJobKind.PIPELINE.value,
                 status=ProcessingJobState.RUNNING.value,
@@ -682,8 +688,6 @@ class ProcessingPipeline:
                 attempts=1,
                 started_at=datetime.utcnow(),
             )
-            session.add(job)
-            session.flush()
 
             try:
                 result = self._refresh_media_assets(session, media_file)
@@ -699,9 +703,9 @@ class ProcessingPipeline:
                 job.error_message = str(exc)
                 job.finished_at = datetime.utcnow()
                 failed += 1
-            session.commit()
+            session.add(job)
 
-            if parent_job is not None and (index == 1 or index == total or index % 25 == 0):
+            if parent_job is not None and should_commit_progress:
                 self._set_job_progress(
                     session,
                     parent_job,
@@ -716,6 +720,8 @@ class ProcessingPipeline:
                         }
                     },
                 )
+
+            if should_commit_progress:
                 session.commit()
 
         return {
@@ -780,13 +786,21 @@ class ProcessingPipeline:
             catalog.set_media_status(media_file.file_id, status="thumb_done", now=datetime.utcnow())
 
         elif media_kind == MediaKind.VIDEO.value:
-            thumb_location = self._thumbnail_service.generate(Path(media_file.current_path), media_file.file_id, MediaKind.VIDEO)
-            catalog.register_derived_asset(media_file.file_id, thumb_location.kind, thumb_location.relative_path)
-            result["assets"].append({"kind": thumb_location.kind.value, "path": str(thumb_location.relative_path)})
-            keyframe_locations = self._keyframe_service.extract(Path(media_file.current_path), media_file.file_id)
-            for location in keyframe_locations:
-                catalog.register_derived_asset(media_file.file_id, location.kind, location.relative_path)
-                result["assets"].append({"kind": location.kind.value, "path": str(location.relative_path)})
+            if which("ffmpeg") is None:
+                result["assets_skipped"] = [
+                    {
+                        "kind": "video",
+                        "reason": "ffmpeg_missing",
+                    }
+                ]
+            else:
+                thumb_location = self._thumbnail_service.generate(Path(media_file.current_path), media_file.file_id, MediaKind.VIDEO)
+                catalog.register_derived_asset(media_file.file_id, thumb_location.kind, thumb_location.relative_path)
+                result["assets"].append({"kind": thumb_location.kind.value, "path": str(thumb_location.relative_path)})
+                keyframe_locations = self._keyframe_service.extract(Path(media_file.current_path), media_file.file_id)
+                for location in keyframe_locations:
+                    catalog.register_derived_asset(media_file.file_id, location.kind, location.relative_path)
+                    result["assets"].append({"kind": location.kind.value, "path": str(location.relative_path)})
             catalog.set_media_status(media_file.file_id, status="analysis_done", now=datetime.utcnow())
 
         else:

@@ -16,6 +16,7 @@ from app.core.settings import load_settings
 from app.db.bootstrap import build_database_state
 from app.main import create_app
 from app.models.job import ProcessingJob
+from app.models.media import MediaFile
 from app.models.runtime import SchedulerRuntimeConfig
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
 from app.services.caption.registry import get_caption_provider
@@ -183,6 +184,23 @@ def test_search_event_is_persisted_after_search(
     with client.app.state.database.session_factory() as session:
         count = session.scalar(select(func.count()).select_from(SearchEvent))
         assert count == 2
+
+
+def test_search_event_is_skipped_while_library_job_is_active(
+    client: TestClient,
+    source_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_image(source_root / "active-job-receipt.jpg")
+    scan_twice(client)
+
+    monkeypatch.setattr(client.app.state.pipeline, "has_active_library_job", lambda: True)
+    response = client.get("/search", params={"q": "receipt"})
+
+    assert response.status_code == 200
+    with client.app.state.database.session_factory() as session:
+        count = session.scalar(select(func.count()).select_from(SearchEvent))
+        assert count == 0
 
 
 def test_date_fallback_does_not_recurse_on_zero_results(client: TestClient) -> None:
@@ -353,6 +371,26 @@ def test_full_scan_imports_old_archive_files_on_first_pass(client: TestClient, t
     search = client.get("/search", params={"q": "archive"})
     assert search.status_code == 200
     assert search.json()["total"] == 1
+
+
+def test_video_assets_degrade_when_ffmpeg_is_missing(
+    client: TestClient,
+    source_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video_path = source_root / "offline-video.mp4"
+    video_path.write_bytes(b"fake mp4 bytes")
+    monkeypatch.setattr("app.services.processing.pipeline.which", lambda name: None if name == "ffmpeg" else None)
+
+    _, second = scan_twice(client)
+
+    assert second["job"]["status"] == "succeeded"
+    assert second["job"]["result"]["processed"]["failed"] == 0
+    with client.app.state.database.session_factory() as session:
+        media_file = session.scalar(select(MediaFile).where(MediaFile.filename == "offline-video.mp4"))
+        assert media_file is not None
+        assert media_file.status == "analysis_done"
+        assert media_file.error_stage is None
 
 
 def test_async_semantic_maintenance_job_exposes_status(client: TestClient, source_root: Path) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from datetime import datetime, timedelta
 from html import escape
 import json
 from shutil import which
@@ -22,6 +24,8 @@ from sqlalchemy import func
 
 
 router = APIRouter(tags=["status"])
+_SECURITY_CACHE_TTL = timedelta(seconds=30)
+_SECURITY_CACHE: tuple[tuple[Any, ...], datetime, dict[str, Any]] | None = None
 
 
 def _schedule_label(hours: int | None) -> str:
@@ -29,7 +33,19 @@ def _schedule_label(hours: int | None) -> str:
 
 
 def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
+    global _SECURITY_CACHE
     model_root = settings.model_root
+    cache_key = (
+        settings.offline_mode,
+        settings.semantic_clip_enabled,
+        str(model_root),
+    )
+    now = datetime.utcnow()
+    if _SECURITY_CACHE is not None:
+        cached_key, cached_at, cached_payload = _SECURITY_CACHE
+        if cached_key == cache_key and now - cached_at < _SECURITY_CACHE_TTL:
+            return deepcopy(cached_payload)
+
     detector_path = model_root / YU_NET_MODEL.relative_path
     recognizer_path = model_root / SFACE_MODEL.relative_path
     face_models_ready = _is_valid_model_file(detector_path) and _is_valid_model_file(recognizer_path)
@@ -43,7 +59,7 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
             ]
         )
 
-    return {
+    payload = {
         "offline_mode": settings.offline_mode,
         "runtime_mode": "offline-local-only" if settings.offline_mode else "standard",
         "outbound_network_enabled": not settings.offline_mode,
@@ -81,6 +97,8 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
             },
         ],
     }
+    _SECURITY_CACHE = (cache_key, now, payload)
+    return deepcopy(payload)
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

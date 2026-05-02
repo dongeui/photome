@@ -93,6 +93,7 @@ async def search_benchmark(
             session,
             embeddings_root=settings.embeddings_root,
             clip_enabled=settings.semantic_clip_enabled,
+            log_events=False,
         )
         service = HybridSearchService(backend)
         return run_benchmark_suite(
@@ -129,11 +130,14 @@ def _search_payload(
 
     database = require_state(request, "database")
     settings = require_state(request, "settings")
+    pipeline = require_state(request, "pipeline")
+    log_events = not pipeline.has_active_library_job()
     with database.session_factory() as session:
         backend = SqlAlchemyHybridSearchBackend(
             session,
             embeddings_root=settings.embeddings_root,
             clip_enabled=settings.semantic_clip_enabled,
+            log_events=log_events,
         )
         service = HybridSearchService(backend)
         items, meta = service.search_with_meta(

@@ -69,6 +69,8 @@ async def gallery_page(
     database = require_state(request, "database")
     settings = require_state(request, "settings")
     security = _security_snapshot(settings)
+    pipeline = require_state(request, "pipeline")
+    log_events = not pipeline.has_active_library_job()
     offset = (page - 1) * PAGE_SIZE
     parsed_date_from = _parse_date(date_from)
     parsed_date_to = _parse_date(date_to)
@@ -81,6 +83,7 @@ async def gallery_page(
                 session,
                 embeddings_root=settings.embeddings_root,
                 clip_enabled=settings.semantic_clip_enabled,
+                log_events=log_events,
             )
             service = HybridSearchService(backend)
             search_results, search_meta = service.search_with_meta(

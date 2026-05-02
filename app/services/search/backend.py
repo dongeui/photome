@@ -81,10 +81,12 @@ class SqlAlchemyHybridSearchBackend:
         embeddings_root: Path,
         vector_index: VectorIndexBackend | None = None,
         clip_enabled: bool = True,
+        log_events: bool = True,
     ) -> None:
         self._session = session
         self._embeddings_root = embeddings_root
         self._clip_enabled = clip_enabled
+        self._log_events = log_events
         _backend_setting = os.environ.get("PHOTOME_VECTOR_BACKEND", "auto")
         self._vector_index = vector_index or build_vector_index(
             session, embeddings_root=embeddings_root, backend=_backend_setting
@@ -571,6 +573,8 @@ class SqlAlchemyHybridSearchBackend:
 
         Silently skips if the DB write fails — logging must never break search.
         """
+        if not self._log_events:
+            return
         try:
             self._session.add(SearchEvent(
                 query=query[:512],
