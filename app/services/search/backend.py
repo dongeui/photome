@@ -723,37 +723,6 @@ class SqlAlchemyHybridSearchBackend:
             )
         return payload
 
-    def _result_dict(
-        self,
-        media_file: MediaFile,
-        *,
-        ocr: MediaOCR | None = None,
-        analysis: MediaAnalysisSignal | None = None,
-        match_reason: str,
-        ocr_match_kind: str | None = None,
-    ) -> dict:
-        """Build result dict — loads tags/face_count individually (use _build_result_dict for batches)."""
-        tags = [
-            {"type": tag_type, "value": tag_value}
-            for tag_type, tag_value in self._session.execute(
-                select(Tag.tag_type, Tag.tag_value)
-                .where(Tag.file_id == media_file.file_id)
-                .order_by(Tag.tag_type.asc(), Tag.tag_value.asc())
-            )
-        ]
-        face_count = int(
-            self._session.scalar(select(func.count()).select_from(Face).where(Face.file_id == media_file.file_id)) or 0
-        )
-        return self._build_result_dict(
-            media_file,
-            ocr=ocr,
-            analysis=analysis,
-            match_reason=match_reason,
-            ocr_match_kind=ocr_match_kind,
-            tags=tags,
-            face_count=face_count,
-        )
-
 
 _LIKE_ESCAPE = "\\"
 
