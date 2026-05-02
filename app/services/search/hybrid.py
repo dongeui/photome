@@ -223,8 +223,8 @@ class HybridSearchService:
         if hasattr(self._backend, "get_tag_vocabulary"):
             try:
                 tag_vocab = self._backend.get_tag_vocabulary()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load tag vocabulary — search quality may be reduced: %s", exc)
         plan = plan_query(query, tag_vocab=tag_vocab)
         cleaned = plan.normalized_query
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
@@ -305,8 +305,8 @@ class HybridSearchService:
         if hasattr(self._backend, "load_feedback_sets"):
             try:
                 hidden_ids, promoted_ids = self._backend.load_feedback_sets()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load search feedback sets: %s", exc)
 
         # Filter out hidden files before scoring
         if hidden_ids:
