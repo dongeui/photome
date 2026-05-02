@@ -87,6 +87,14 @@ def test_query_planner_extracts_image_search_intents() -> None:
     assert any("sea" in variant or "ocean" in variant for variant in plan.visual_queries)
 
 
+def test_seaside_natural_language_query_expands_to_visual_search() -> None:
+    plan = plan_query("바닷가에서 찍은 사진")
+
+    assert plan.intent == "visual"
+    assert "바닷가" in plan.place_terms
+    assert any("seaside" in variant or "ocean" in variant for variant in plan.visual_queries)
+
+
 def test_hybrid_search_prefers_cross_channel_agreement() -> None:
     service = HybridSearchService(FakeBackend())
 

@@ -108,8 +108,8 @@ TEXT_HINTS = {
 }
 SCREEN_HINTS = {"screenshot", "screen", "ui", "chat", "popup", "스크린샷", "화면", "앱", "대화창", "팝업"}
 TRAVEL_HINTS = {
-    "travel", "trip", "vacation", "abroad", "tour",
-    "여행", "휴가", "해외", "관광", "제주", "해변", "바다",
+    "travel", "trip", "vacation", "abroad", "tour", "beach", "sea", "ocean", "coast", "seaside",
+    "여행", "휴가", "해외", "관광", "제주", "해변", "바다", "바닷가", "해안", "해수욕장",
 }
 CELEBRATION_HINTS = {
     "birthday", "party", "wedding", "graduation", "celebration",

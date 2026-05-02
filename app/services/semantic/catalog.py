@@ -253,10 +253,17 @@ class SemanticCatalog:
                 self._upsert_search_document_fts(row)
         return row
 
-    def list_media_needing_search_document(self, *, version: str, limit: int = 100) -> list[MediaFile]:
+    def list_media_needing_search_document(
+        self,
+        *,
+        version: str,
+        limit: int = 100,
+        auto_tag_version: str | None = None,
+    ) -> list[MediaFile]:
         statement = (
             select(MediaFile)
             .outerjoin(SearchDocument, SearchDocument.file_id == MediaFile.file_id)
+            .outerjoin(MediaAutoTagState, MediaAutoTagState.file_id == MediaFile.file_id)
             .where(
                 MediaFile.status.in_(("thumb_done", "analysis_done")),
                 MediaFile.media_kind.in_(("image", "video")),
@@ -264,6 +271,14 @@ class SemanticCatalog:
                     SearchDocument.file_id.is_(None),
                     SearchDocument.version != version,
                     SearchDocument.source_updated_at < MediaFile.updated_at,
+                    *(
+                        (
+                            MediaAutoTagState.file_id.is_(None),
+                            MediaAutoTagState.version != auto_tag_version,
+                        )
+                        if auto_tag_version is not None
+                        else ()
+                    ),
                 ),
             )
             .order_by(MediaFile.updated_at.asc(), MediaFile.file_id.asc())

@@ -20,7 +20,7 @@ _FILENAME_KEYWORD_TAGS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"kakao|카카오|kkt", re.IGNORECASE), "kakaotalk"),
     (re.compile(r"screenshot|screen|스크린|캡처", re.IGNORECASE), "screenshot"),
     (re.compile(r"receipt|영수증", re.IGNORECASE), "receipt"),
-    (re.compile(r"beach|바다|해변", re.IGNORECASE), "beach"),
+    (re.compile(r"beach|sea|ocean|coast|바다|바닷가|해변|해수욕장|해안", re.IGNORECASE), "beach"),
     (re.compile(r"travel|여행|trip|tour", re.IGNORECASE), "travel"),
     (re.compile(r"food|meal|음식|식사|맛집", re.IGNORECASE), "food"),
     (re.compile(r"wedding|결혼|웨딩", re.IGNORECASE), "wedding"),
@@ -28,7 +28,9 @@ _FILENAME_KEYWORD_TAGS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"party|파티", re.IGNORECASE), "celebration"),
     (re.compile(r"dog|강아지|puppy", re.IGNORECASE), "animal"),
     (re.compile(r"cat|고양이", re.IGNORECASE), "animal"),
-    (re.compile(r"baby|아기|infant", re.IGNORECASE), "baby"),
+    (re.compile(r"baby|아기|애기|infant|newborn|toddler", re.IGNORECASE), "baby"),
+    (re.compile(r"woman|women|female|girl|여자|여성", re.IGNORECASE), "woman"),
+    (re.compile(r"man|men|male|boy|남자|남성", re.IGNORECASE), "man"),
     (re.compile(r"selfie|셀카|셀피", re.IGNORECASE), "person"),
     (re.compile(r"family|가족", re.IGNORECASE), "group"),
     (re.compile(r"jeju|제주", re.IGNORECASE), "travel"),
@@ -58,6 +60,9 @@ CLIP_CONCEPTS = (
     # People
     ClipConcept("person", ("a photo of a person", "a portrait photo", "a human face"), 0.235),
     ClipConcept("baby", ("a photo of a baby", "an infant lying down", "a newborn baby"), 0.255),
+    ClipConcept("woman", ("a photo of a woman", "a female portrait", "a girl smiling in a photo"), 0.250),
+    ClipConcept("man", ("a photo of a man", "a male portrait", "a boy smiling in a photo"), 0.250),
+    ClipConcept("child", ("a photo of a child", "a kid playing", "a young child in a photo"), 0.250),
     ClipConcept("group", ("a group photo of people", "friends posing for a photo", "people gathered together"), 0.248),
     # Documents / screens
     ClipConcept("receipt", ("a photo of a receipt", "a purchase receipt with text", "a cash register receipt"), 0.252),
@@ -66,6 +71,8 @@ CLIP_CONCEPTS = (
     # Outdoors / nature
     ClipConcept("outdoor", ("an outdoor photo", "a street or park scene", "outside in natural light"), 0.242),
     ClipConcept("beach", ("a beach photo", "the sea and sand", "ocean waves on a beach"), 0.250),
+    ClipConcept("sea", ("a photo of the sea", "blue ocean water", "a coastal seaside view"), 0.248),
+    ClipConcept("water", ("a photo near water", "water surface outdoors", "a lake river or ocean"), 0.246),
     ClipConcept("mountain", ("a mountain landscape", "a hiking trail on a mountain", "a mountain view"), 0.248),
     ClipConcept("nature", ("a nature photo", "trees and greenery", "a forest or countryside scene"), 0.242),
     ClipConcept("sky", ("a blue sky with clouds", "a sunset sky", "a dramatic sky landscape"), 0.240),
@@ -85,6 +92,21 @@ CLIP_CONCEPTS = (
     # Animals
     ClipConcept("animal", ("a pet or animal", "a dog or cat", "an animal close-up portrait"), 0.240),
 )
+
+CONCEPT_ALIASES: dict[str, tuple[str, ...]] = {
+    "beach": ("beach", "sea", "ocean", "coast", "water", "해변", "바다"),
+    "sea": ("sea", "ocean", "water", "coast", "바다"),
+    "water": ("water", "sea", "ocean", "river", "lake", "물"),
+    "baby": ("baby", "infant", "newborn", "toddler", "아기"),
+    "woman": ("woman", "female", "girl", "여자"),
+    "man": ("man", "male", "boy", "남자"),
+    "child": ("child", "kid", "어린이", "아이"),
+    "mountain": ("mountain", "hiking", "산", "등산"),
+    "nature": ("nature", "outdoor", "자연", "야외"),
+    "food": ("food", "meal", "음식"),
+    "receipt": ("receipt", "영수증"),
+    "screenshot": ("screenshot", "screen", "화면", "스크린샷"),
+}
 
 
 def tags_from_signals(analysis: dict, ocr_text: str = "") -> list[MediaTagInput]:
@@ -119,7 +141,10 @@ def tags_from_embedding_vector(vector: np.ndarray) -> list[MediaTagInput]:
             hits.append((score, concept.tag))
 
     hits.sort(reverse=True)
-    return _to_auto_tags([tag for _, tag in hits[:5]])
+    expanded: list[str] = []
+    for _, tag in hits[:5]:
+        expanded.extend(CONCEPT_ALIASES.get(tag, (tag,)))
+    return _to_auto_tags(expanded[:12])
 
 
 def merge_auto_tags(*tag_groups: list[MediaTagInput]) -> list[MediaTagInput]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,6 +31,27 @@ def test_auto_tags_from_signals_are_conservative_and_deduped() -> None:
         ("auto", "text"),
         ("auto", "receipt"),
     ]
+
+
+def test_clip_concept_tags_expand_natural_language_aliases(monkeypatch) -> None:
+    basis = {
+        "beach": np.array([1.0, 0.0, 0.0], dtype="float32"),
+        "sea": np.array([0.98, 0.02, 0.0], dtype="float32"),
+        "water": np.array([0.9, 0.1, 0.0], dtype="float32"),
+    }
+
+    def fake_concept_vector(tag: str) -> np.ndarray:
+        return basis.get(tag, np.array([0.0, 1.0, 0.0], dtype="float32"))
+
+    monkeypatch.setattr(auto_tags, "_concept_vector", fake_concept_vector)
+
+    tags = auto_tags.tags_from_embedding_vector(np.array([1.0, 0.0, 0.0], dtype="float32"))
+    values = [tag.tag_value for tag in tags]
+
+    assert "beach" in values
+    assert "sea" in values
+    assert "ocean" in values
+    assert "바다" in values
 
 
 def test_auto_tag_state_records_version(tmp_path: Path) -> None:

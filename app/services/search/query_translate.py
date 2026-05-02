@@ -39,11 +39,16 @@ LEXICON = {
     "꽃": "flower floral bloom garden",
     "나무": "tree forest nature green",
     "하늘": "sky clouds blue",
-    "바다": "sea ocean beach water waves",
+    "바다": "sea ocean beach water waves coast seaside",
+    "바다사진": "sea ocean beach water waves coast seaside",
+    "바닷가": "seaside coast beach sea ocean",
+    "바닷물": "sea water ocean waves",
     "산": "mountain hiking outdoor landscape",
     "강": "river stream water nature",
     "공원": "park outdoor green nature",
-    "해변": "beach sand sea ocean",
+    "해변": "beach sand sea ocean coast",
+    "해안": "coast seaside ocean beach",
+    "해수욕장": "beach swimming sea ocean summer",
     "숲": "forest trees nature green",
     # Food & drinks
     "음식": "food meal dish restaurant",
@@ -131,7 +136,6 @@ LEXICON = {
     "강릉": "Gangneung Korea beach coffee",
     "경주": "Gyeongju Korea historic cultural",
     "전주": "Jeonju Korea traditional hanok",
-    "해수욕장": "beach swimming sea ocean summer",
     "놀이공원": "amusement park ride fun",
     "동물원": "zoo animal outdoor",
     # Additional moods / activities
@@ -159,6 +163,8 @@ TYPO_CORRECTIONS = {
     "아가": "아기",
     "애긔": "아기",
     "베이비": "아기",
+    "바닷가사진": "바닷가 사진",
+    "바다사딘": "바다사진",
     "멍멍이": "강아지",
     "냥이": "고양이",
     "야옹이": "고양이",
@@ -220,6 +226,11 @@ ENGLISH_EXPANSIONS = {
     "cat": "cat kitten animal",
     "food": "food meal dish restaurant",
     "beach": "beach sea ocean sand waves",
+    "sea": "sea ocean beach water waves coast",
+    "ocean": "ocean sea beach water waves coast",
+    "coast": "coast seaside beach ocean sea",
+    "seaside": "seaside coast beach ocean sea",
+    "water": "water sea ocean river lake",
     "mountain": "mountain hiking outdoor landscape",
     "travel": "travel trip landmark outdoor",
     "party": "party celebration people happy",
@@ -253,7 +264,11 @@ _CLIP_TEMPLATES: dict[str, str] = {
     "친구": "friends hanging out together",
     "여행": "a travel vacation trip",
     "제주": "Jeju island beach landscape Korea",
-    "바다": "ocean beach waves sea",
+    "바다": "ocean beach waves sea coast water",
+    "바닷가": "seaside coast beach sea ocean",
+    "해변": "beach sand sea ocean coast",
+    "해안": "coast seaside ocean beach",
+    "해수욕장": "beach swimming sea ocean summer",
     "산": "mountain hiking outdoor scenic",
     "공원": "outdoor park green nature",
     "카페": "cozy cafe coffee shop interior",
@@ -509,6 +524,9 @@ def strip_korean_particles(text: str) -> str:
     result = []
     for token in tokens:
         if _has_hangul(token):
+            if token in LEXICON or token in _CLIP_TEMPLATES:
+                result.append(token)
+                continue
             for particle in _KO_PARTICLES_UNIQUE:
                 candidate = token[: -len(particle)]
                 if token.endswith(particle) and len(candidate) >= 2:

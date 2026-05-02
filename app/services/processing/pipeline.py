@@ -22,6 +22,7 @@ from app.core.contracts import DerivedAssetKind, MediaFaceInput, MediaKind, Medi
 from app.models.job import ProcessingJob
 from app.models.media import MediaFile
 from app.models.person import Person
+from app.models.semantic import MediaEmbedding
 from app.models.tag import Tag
 from app.services.analysis import FaceAnalysisError, FaceAnalysisService
 from app.services.analysis import auto_tags, image_signals
@@ -429,6 +430,7 @@ class ProcessingPipeline:
                 pending = semantic_catalog.list_media_needing_search_document(
                     version=self._semantic_search_version,
                     limit=batch_size,
+                    auto_tag_version=self._semantic_auto_tag_version if self._semantic_clip_enabled else None,
                 )
                 succeeded = failed = 0
                 if progress_callback is not None:
@@ -443,6 +445,7 @@ class ProcessingPipeline:
 
                 for index, media_file in enumerate(pending, start=1):
                     try:
+                        self._refresh_auto_tags_from_existing_embedding(session, media_file)
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
                         succeeded += 1
                     except Exception as exc:
@@ -890,6 +893,53 @@ class ProcessingPipeline:
             ]
 
         return result
+
+    def _refresh_auto_tags_from_existing_embedding(self, session: Session, media_file: MediaFile) -> list[MediaTagInput]:
+        """Rebuild Phase 2 auto-tags from persisted CLIP vectors when available."""
+        if not self._semantic_clip_enabled:
+            return []
+        embedding = session.execute(
+            select(MediaEmbedding)
+            .where(
+                MediaEmbedding.file_id == media_file.file_id,
+                MediaEmbedding.version == self._semantic_embedding_version,
+            )
+            .order_by(MediaEmbedding.updated_at.desc(), MediaEmbedding.id.desc())
+        ).scalars().first()
+        if embedding is None:
+            SemanticCatalog(session).upsert_auto_tag_state(
+                media_file.file_id,
+                tags=[],
+                version=self._semantic_auto_tag_version,
+                source="clip-missing",
+            )
+            return []
+
+        embedding_tags = auto_tags.tags_from_embedding_file(
+            embedding.embedding_ref,
+            self._embeddings_root,
+        )
+        if not embedding_tags:
+            SemanticCatalog(session).upsert_auto_tag_state(
+                media_file.file_id,
+                tags=[],
+                version=self._semantic_auto_tag_version,
+                source="clip",
+            )
+            return []
+
+        catalog = MediaCatalog(session)
+        preserved_tags, place_tags, person_tags = self._split_existing_tags(media_file.tags)
+        preserved_tags = [tag for tag in preserved_tags if tag.tag_type != "auto"]
+        merged = auto_tags.merge_auto_tags(embedding_tags)
+        catalog.replace_tags(media_file.file_id, preserved_tags + place_tags + person_tags + merged)
+        SemanticCatalog(session).upsert_auto_tag_state(
+            media_file.file_id,
+            tags=merged,
+            version=self._semantic_auto_tag_version,
+            source="clip",
+        )
+        return merged
 
     def _analysis_source_path(self, media_file: MediaFile) -> Path:
         thumbnail_path = self._derived_root / self._clip_source_thumbnail_relative_path(media_file.file_id)
