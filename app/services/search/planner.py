@@ -4,82 +4,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 import re
 from typing import TYPE_CHECKING
+
+import yaml
 
 from app.services.search import query_translate
 
 if TYPE_CHECKING:
     from app.services.search.vocab import TagVocabulary
 
+_VOCAB_SEED_PATH = Path(__file__).with_name("vocab_seed.yaml")
 
-PERSON_TERMS = {
-    "face", "faces", "person", "people", "portrait", "selfie", "family", "friend", "friends",
-    "얼굴", "사람", "인물", "셀카", "가족", "친구", "커플", "엄마", "아빠", "할머니", "할아버지",
-    "남자", "남성", "여자", "여성", "아기", "애기", "아이", "어린이",
-    "형", "오빠", "누나", "언니", "동생", "남동생", "여동생", "조카", "남편", "아내",
-    "선생님", "친척", "이모", "삼촌", "외삼촌", "고모", "사촌",
-}
-OCR_TERMS = {
-    "text", "ocr", "document", "receipt", "screenshot", "screen", "error", "message", "chat",
-    "텍스트", "글씨", "문서", "영수증", "스크린샷", "화면", "오류", "메시지", "대화", "카톡",
-    "카카오톡", "캡처", "캡쳐", "갈무리", "인스타", "인스타그램", "앱화면",
-    "공지", "알림", "알림창", "팝업", "대화창", "채팅",
-}
-PLACE_TERMS = {
-    "서울", "제주", "부산", "공항", "카페", "식당", "학교", "집", "공원", "해변", "바다", "산",
-    "바닷가", "바닷물", "해안", "해수욕장", "바다사진",
-    "seoul", "jeju", "busan", "airport", "cafe", "restaurant", "school", "home", "park", "beach",
-    "sea", "ocean", "coast", "seaside", "water", "mountain",
-    "강남", "홍대", "명동", "경복궁", "인사동", "이태원", "한강", "속초", "강릉", "경주",
-    "전주", "대전", "광주", "인천", "수원", "대구", "울산",
-    "해수욕장", "박물관", "동물원", "수족관", "놀이공원", "놀이터", "체육관", "도서관",
-    "지하철", "버스", "기차", "ktx", "고속도로",
-}
 
-# 지명 변형 → canonical PLACE_TERMS 키로 매핑
-# 예: "제주도" 입력 시 place_terms에 "제주" 포함
-PLACE_ALIASES: dict[str, str] = {
-    "제주도": "제주",
-    "제주특별자치도": "제주",
-    "제주시": "제주",
-    "서귀포": "제주",
-    "서울시": "서울",
-    "서울특별시": "서울",
-    "부산시": "부산",
-    "부산광역시": "부산",
-    "인천시": "인천",
-    "인천광역시": "인천",
-    "대전시": "대전",
-    "대전광역시": "대전",
-    "대구시": "대구",
-    "대구광역시": "대구",
-    "광주시": "광주",
-    "광주광역시": "광주",
-    "울산시": "울산",
-    "울산광역시": "울산",
-    "강남구": "강남",
-    "강남역": "강남",
-    "홍대입구": "홍대",
-    "홍대역": "홍대",
-    "홍대거리": "홍대",
-    "명동역": "명동",
-    "이태원역": "이태원",
-    "한강공원": "한강",
-    "속초시": "속초",
-    "강릉시": "강릉",
-    "경주시": "경주",
-    "전주시": "전주",
-    "수원시": "수원",
-}
-VISUAL_TERMS = {
-    "baby", "food", "beach", "sea", "ocean", "coast", "water", "travel", "wedding", "birthday", "dog", "cat", "mountain", "sunset",
-    "아기", "음식", "바다", "여행", "결혼식", "생일", "강아지", "고양이", "산", "일몰",
-    "바닷가", "바닷물", "해변", "해안", "해수욕장", "꽃", "하늘", "공원", "캠핑", "케이크", "파티",
-    "소풍", "나들이", "드라이브", "산책", "등산", "운동", "수영", "자전거",
-    "야경", "일출", "노을", "설경", "단풍", "벚꽃",
-    "졸업식", "입학식", "돌잔치", "환갑", "칠순",
-}
+def _load_vocab_seed() -> dict:
+    with _VOCAB_SEED_PATH.open(encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+_seed = _load_vocab_seed()
+
+PERSON_TERMS: set[str] = set(_seed.get("person_terms", []))
+OCR_TERMS: set[str] = set(_seed.get("ocr_terms", []))
+PLACE_TERMS: set[str] = set(_seed.get("place_terms", []))
+VISUAL_TERMS: set[str] = set(_seed.get("visual_terms", []))
+PLACE_ALIASES: dict[str, str] = _seed.get("place_aliases", {})
+
 DATE_STOP_TERMS = {
     "작년", "지난해", "재작년", "올해", "이번해",
     "지난달", "저번달", "이번달", "이번", "달",
