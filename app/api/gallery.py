@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import Select, exists, false, func, or_, select
 
 from app.api.deps import require_state
+from app.api.status import _security_snapshot
 from app.models.annotation import MediaAnnotation
 from app.models.asset import DerivedAsset
 from app.models.media import MediaFile
@@ -66,6 +67,8 @@ async def gallery_page(
     page: int = Query(default=1, ge=1),
 ) -> HTMLResponse:
     database = require_state(request, "database")
+    settings = require_state(request, "settings")
+    security = _security_snapshot(settings)
     offset = (page - 1) * PAGE_SIZE
     parsed_date_from = _parse_date(date_from)
     parsed_date_to = _parse_date(date_to)
@@ -74,7 +77,6 @@ async def gallery_page(
 
     with database.session_factory() as session:
         if q and q.strip():
-            settings = require_state(request, "settings")
             backend = SqlAlchemyHybridSearchBackend(
                 session,
                 embeddings_root=settings.embeddings_root,
@@ -644,6 +646,8 @@ async def gallery_page(
           <span class="stat-card"><strong>{total}</strong> items</span>
           <span class="stat-card"><strong>{len(items)}</strong> cards</span>
           <span class="stat-card">Page <strong>{page}</strong>/{page_count}</span>
+          <span class="stat-card">{escape(security["runtime_mode"])}</span>
+          <span class="stat-card">{'network blocked' if not security['outbound_network_enabled'] else 'network allowed'}</span>
         </div>
       </div>
       <a class="button secondary" href="/dashboard">Service Dashboard</a>

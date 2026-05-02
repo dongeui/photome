@@ -64,6 +64,7 @@ def test_search_finds_scanned_media_by_filename_and_semantic_rows_exist(
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
+    assert payload["security"]["runtime_mode"] in {"standard", "offline-local-only"}
     assert payload["items"][0]["filename"] == "vacation-receipt.jpg"
 
     file_id = payload["items"][0]["file_id"]
@@ -111,6 +112,8 @@ def test_offline_mode_disables_outbound_features(monkeypatch: pytest.MonkeyPatch
         assert "Reverse geocoding is blocked." in payload["security"]["disabled_features"]
         assert "Caption generation is disabled." in payload["security"]["disabled_features"]
         states = {item["name"]: item["state"] for item in payload["security"]["local_dependencies"]}
+        assert "ffmpeg" in states
+        assert "ffprobe" in states
         assert states["CLIP semantic embedding"] == "disabled"
         assert states["Caption provider"] == "disabled"
 
@@ -349,6 +352,7 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
 
     assert response.status_code == 200
     html = response.text
+    assert "Outbound Network" in html
     assert 'const phase1StorageKey = "photome.dashboard.phase1.job";' in html
     assert 'const phase2StorageKey = "photome.dashboard.phase2.job";' in html
     assert 'const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";' in html

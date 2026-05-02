@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape
 import json
+from shutil import which
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -48,6 +49,21 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
         "outbound_network_enabled": not settings.offline_mode,
         "disabled_features": disabled_features,
         "local_dependencies": [
+            {
+                "name": "ffmpeg",
+                "state": "ready" if which("ffmpeg") else "missing-local-tool",
+                "detail": "Required for video thumbnails and keyframes.",
+            },
+            {
+                "name": "ffprobe",
+                "state": "ready" if which("ffprobe") else "missing-local-tool",
+                "detail": "Required for video metadata extraction.",
+            },
+            {
+                "name": "sips",
+                "state": "ready" if which("sips") else "optional-fallback-missing",
+                "detail": "macOS image decode/thumbnail fallback.",
+            },
             {
                 "name": "CLIP semantic embedding",
                 "state": "disabled" if not settings.semantic_clip_enabled else "local-cache-required",

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select, text
 
 from app.api.deps import require_state
+from app.api.status import _security_snapshot
 from app.models.semantic import SearchDocument, SearchFeedback, SearchWeightProfile
 from app.services.search import HybridSearchService
 from app.services.search.backend import SqlAlchemyHybridSearchBackend
@@ -115,6 +116,7 @@ def _search_payload(
             "items": [],
             "total": 0,
             "query": q,
+            "security": _security_snapshot(require_state(request, "settings")),
             "meta": {
                 "effective_mode": mode,
                 "intent_reason": "empty",
@@ -142,7 +144,13 @@ def _search_payload(
             weight_overrides=weight_overrides,
         )
         session.commit()
-    return {"items": items, "total": len(items), "query": q, "meta": meta}
+    return {
+        "items": items,
+        "total": len(items),
+        "query": q,
+        "security": _security_snapshot(settings),
+        "meta": meta,
+    }
 
 
 def _start_of_day(value: Optional[date]) -> Optional[datetime]:
