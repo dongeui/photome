@@ -186,6 +186,7 @@ class HybridSearchService:
         debug: bool = False,
         weight_overrides: dict[str, float] | None = None,
         allow_date_fallback: bool = True,
+        allow_condition_fallback: bool = True,
         use_planner_dates: bool = True,
     ) -> tuple[list[dict], dict]:
         if not query.strip():
@@ -361,6 +362,24 @@ class HybridSearchService:
                     final = corrected_results
                     meta["fallback"] = "fuzzy_corrected"
                     meta["fuzzy_corrected_query"] = corrected
+        # Zero-result fallback 3: progressively relax place/person conditions
+        # e.g. "작년 바다에서 가족이랑" → no match → try "바다" alone → try "가족" alone
+        if (
+            not final
+            and not debug
+            and allow_condition_fallback
+            and (plan.place_terms or plan.person_terms)
+        ):
+            relaxed, relaxed_label = self._loosened_condition_fallback(
+                plan=plan,
+                limit=limit,
+                mode=mode,
+                weight_overrides=weight_overrides,
+            )
+            if relaxed:
+                final = relaxed
+                meta["fallback"] = relaxed_label
+
         if debug:
             fused_for_debug = debug_candidates or merged
             meta["debug"] = {
@@ -465,6 +484,44 @@ class HybridSearchService:
             use_planner_dates=False,
         )
         return results
+
+    def _loosened_condition_fallback(
+        self,
+        *,
+        plan: "QueryPlan",
+        limit: int,
+        mode: str,
+        weight_overrides: dict[str, float] | None,
+    ) -> tuple[list[dict], str]:
+        """Retry with progressively fewer conditions when the combined query returns nothing.
+
+        Order: visual terms only → each place term → each person term.
+        Each sub-search disables further fallbacks to prevent recursion.
+        """
+        common: dict = dict(
+            limit=limit,
+            mode=mode,
+            debug=False,
+            weight_overrides=weight_overrides,
+            allow_date_fallback=False,
+            allow_condition_fallback=False,
+        )
+        # Step 1: visual terms stripped of place/person context
+        if plan.visual_terms:
+            results, _ = self.search_with_meta(" ".join(plan.visual_terms[:3]), **common)
+            if results:
+                return results, "condition_visual_only"
+        # Step 2: each place term individually
+        for term in plan.place_terms[:2]:
+            results, _ = self.search_with_meta(term, **common)
+            if results:
+                return results, "condition_place_only"
+        # Step 3: each person term individually
+        for term in plan.person_terms[:2]:
+            results, _ = self.search_with_meta(term, **common)
+            if results:
+                return results, "condition_person_only"
+        return [], ""
 
     def _search_clip_variants(
         self,

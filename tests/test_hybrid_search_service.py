@@ -134,3 +134,32 @@ def test_custom_reranker_order_is_preserved() -> None:
 
     assert meta["effective_mode"] == "hybrid"
     assert [item["file_id"] for item in results[:2]] == ["file-b", "file-a"]
+
+
+def test_condition_fallback_relaxes_to_place_term() -> None:
+    """When a compound query finds nothing, fallback tries each place term alone."""
+
+    class NoResultBackend(FakeBackend):
+        def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
+            return []
+
+        def search_by_embedding(self, query_embedding: bytes, **_kwargs) -> list[dict]:
+            return []
+
+        def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]:
+            # Only returns results when queried with a single known place term
+            if query in ("바다", "sea", "beach"):
+                return [{"file_id": "beach-file", "distance": 0.3}]
+            return []
+
+    service = HybridSearchService(NoResultBackend())
+
+    # Complex query with place+person+date that finds nothing combined
+    results, meta = service.search_with_meta(
+        "작년 여름 바다에서 가족이랑 찍은 사진", limit=5, mode="hybrid"
+    )
+
+    assert results, "expected condition fallback to find results"
+    assert meta.get("fallback") in (
+        "condition_visual_only", "condition_place_only", "date_relaxed"
+    )
