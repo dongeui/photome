@@ -61,15 +61,26 @@ _KO_TRAILING_ENDINGS = (
     "이라는", "라는", "이라", "이고", "이며",
     "하는", "하던", "했던", "된", "되는", "되던",
     "있는", "있던", "없는",
+    "여행",  # 바다여행 → 바다 + 여행
     "사진", "영상", "이미지", "그림", "컷",
     "에의", "의", "을", "를", "이", "가", "은", "는", "에", "로", "와", "과",
 )
 
-_KEEP_AS_TERM = {"사진", "영상", "이미지", "그림", "컷"}
+_KEEP_AS_TERM = {"여행", "사진", "영상", "이미지", "그림", "컷"}
+
+# Particles that join two nouns in the middle of a compound token.
+# Checked when no trailing ending matches, before giving up on splitting.
+_INNER_JOINERS = ("이랑", "랑", "하고")
 
 
 def _heuristic_split(token: str) -> list[str]:
-    """Split a run-on Korean token into constituent nouns heuristically."""
+    """Split a run-on Korean token into constituent nouns heuristically.
+
+    Two passes:
+    1. Strip known trailing particles/endings from the right end (loop).
+    2. If no trailing ending found, look for inner joiner particles
+       (이랑, 랑, 하고) and recurse on both sides.
+    """
     result: list[str] = []
     remaining = token
     for _ in range(6):
@@ -89,7 +100,20 @@ def _heuristic_split(token: str) -> list[str]:
                 result.insert(0, tail)
             remaining = split_here
         else:
-            break
+            # Try inner joiner particles before giving up
+            joined = False
+            for joiner in _INNER_JOINERS:
+                idx = remaining.find(joiner)
+                if 0 < idx < len(remaining) - len(joiner):
+                    left = remaining[:idx]
+                    right = remaining[idx + len(joiner):]
+                    if len(left) >= 2 and len(right) >= 2:
+                        result = _heuristic_split(left) + _heuristic_split(right) + result
+                        remaining = ""
+                        joined = True
+                        break
+            if not joined:
+                break
     if remaining and len(remaining) >= 2:
         result.insert(0, remaining)
     return result if result else [token]
@@ -100,7 +124,8 @@ def _heuristic_nouns(text: str) -> list[str]:
     raw = re.findall(r"[0-9A-Za-z가-힣_]+", text.casefold())
     tokens: list[str] = []
     for token in raw:
-        if re.search(r"[가-힣]", token) and len(token) >= 6:
+        # Lower threshold (4 vs 6) catches particle-attached tokens like "바다에서"
+        if re.search(r"[가-힣]", token) and len(token) >= 4:
             tokens.extend(_heuristic_split(token))
         else:
             tokens.append(token)

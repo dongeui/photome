@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.search.hybrid import HybridSearchService, resolve_effective_mode
 from app.services.search.planner import plan_query
 from app.services.search.query_translate import expand_for_clip, normalize_query
+from app.services.search.tokenizer import korean_nouns
 
 
 class FakeBackend:
@@ -163,3 +164,24 @@ def test_condition_fallback_relaxes_to_place_term() -> None:
     assert meta.get("fallback") in (
         "condition_visual_only", "condition_place_only", "date_relaxed"
     )
+
+
+def test_heuristic_splits_inner_joiner_compound() -> None:
+    """가족이랑바다여행 should tokenize to [가족, 바다, 여행] without KoNLPy."""
+    tokens = korean_nouns("가족이랑바다여행")
+    assert "가족" in tokens
+    assert "바다" in tokens
+    assert "여행" in tokens
+
+
+def test_heuristic_splits_particle_attached_token() -> None:
+    """바다에서 (4 chars) should be split to [바다] with the lowered threshold."""
+    tokens = korean_nouns("바다에서")
+    assert "바다" in tokens
+
+
+def test_heuristic_splits_rang_joiner() -> None:
+    """엄마랑카페 should split to [엄마, 카페]."""
+    tokens = korean_nouns("엄마랑카페")
+    assert "엄마" in tokens
+    assert "카페" in tokens
