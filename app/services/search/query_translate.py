@@ -179,31 +179,14 @@ _KO_FILLER = re.compile(
     re.UNICODE,
 )
 
-# Korean particles / endings to strip token-by-token
-# Order matters: longer suffixes first to avoid partial matches
-_KO_PARTICLES = (
-    "에서의", "으로의", "로부터", "에서", "으로", "에게", "한테", "부터",
-    "까지", "마다", "이나", "이랑", "와", "과", "이랑", "하고",
-    "에서", "에서", "에게", "에서", "에서", "에서",
-    "이라", "이라는", "라는", "이는", "이고", "이며",
-    "에서", "에서", "에서", "에서", "에서",
-    "에서", "에서",
-    "에서", "에의", "에의",
-    "의", "을", "를", "이", "가", "은", "는",
-    "에", "로", "와", "과",
+# Korean particles / endings to strip token-by-token.
+# Longer suffixes must appear first to avoid partial matches.
+_KO_PARTICLES_UNIQUE: tuple[str, ...] = (
+    "에서의", "으로의", "로부터", "에서", "으로", "에게", "한테",
+    "부터", "까지", "마다", "이나", "이랑", "하고",
+    "이라는", "라는", "이라", "이고", "이며",
+    "에의", "의", "을", "를", "이", "가", "은", "는", "에", "로", "와", "과",
 )
-# Build a unique ordered tuple (de-dup while preserving order)
-_seen: set[str] = set()
-_KO_PARTICLES_UNIQUE: tuple[str, ...] = tuple(
-    p for p in (
-        "에서의", "으로의", "로부터", "에서", "으로", "에게", "한테",
-        "부터", "까지", "마다", "이나", "이랑", "하고",
-        "이라는", "라는", "이라", "이고", "이며",
-        "에의", "의", "을", "를", "이", "가", "은", "는", "에", "로", "와", "과",
-    )
-    if p not in _seen and not _seen.add(p)  # type: ignore[func-returns-value]
-)
-del _seen
 
 # ---------------------------------------------------------------------------
 # English expansions for common photo terms
