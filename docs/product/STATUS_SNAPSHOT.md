@@ -29,6 +29,8 @@ updated 2026-04-29 (검색 강화 Round 1~3 완료)
 - Phase 2 검색 종착지 기술 검토 문서는 `docs/engineering/PHASE2_SEARCH_TECH_REVIEW.md`다.
 - 로컬 서비스 상태를 보는 `/dashboard` 페이지가 추가됐다. 현재 샘플 DB 기준 미리보기 서버는 `127.0.0.1:8001`에서 확인 가능하다.
 - 기본 실행 모델은 `native local service + localhost web UI`다. macOS는 메뉴바 셸을 얹고, Docker는 선택 배포 옵션으로 둔다.
+- 배포 모델은 `photome-base`와 optional `photome-local-ai-pack`으로 나눈다. 기본 앱에는 CLIP/OpenCLIP 모델 weight를 포함하지 않는다.
+- 자연어 이미지 검색(`바다에서 찍은 사진`, `baby beach` 등)은 local AI pack 설치 후 활성화한다. 설치 후 분석은 로컬/오프라인 모드에서 실행 가능해야 한다.
 - HEIC 처리에는 macOS `sips` fallback을 사용한다.
 - 멀티에이전트 운영체계는 `Orchestrator / Planner / Developer / QA` 4역할로 유지한다.
 - 실행 정책은 `AGENTS.md`, `AGENTS_LIGHT.md`, `.codex/context/ALL_TASKS.md` 3계층으로 정리됐다.
@@ -66,11 +68,14 @@ updated 2026-04-29 (검색 강화 Round 1~3 완료)
 - 검색 강화 전 사이클 완료 (Batch 1-A~D + Round 2/3). 모두 커밋·푸시됨.
 - 로컬 서버는 `http://127.0.0.1:8000/gallery`와 `http://127.0.0.1:8000/dashboard`에서 확인 가능하다.
 - 서버 실행 설정은 Phase 1 polling off, Phase 2 semantic scheduler on, CLIP off, face analysis off다.
+- 배포/모델팩 분리 정책은 `docs/ops/PACKAGING_STRATEGY.md`에 정리한다.
 
 ## 남은 작업
 
 - synthetic NL QA 확장: 실제 이미지 없이 planner/channel/ranking 회귀를 강화
 - vector adapter 후보 성능 검토: FAISS/LanceDB/Qdrant 중 첫 외부 adapter 결정
+- local AI pack 준비 명령/검증 UI/모델 캐시 상태 표시 구현
+- CLIP provider 설정을 model name/pretrained/cache root/env 기반으로 분리
 - people/person group API 구현
 - reverse geocoding provider/cache 구현
 - VLM caption adapter 구현
@@ -90,6 +95,7 @@ updated 2026-04-29 (검색 강화 Round 1~3 완료)
 - [docs/engineering/PLAN.md](/Users/dongeui/Desktop/chance/photome/docs/engineering/PLAN.md)
 - [docs/engineering/ARCHITECTURE.md](/Users/dongeui/Desktop/chance/photome/docs/engineering/ARCHITECTURE.md)
 - [docs/engineering/PHASE2_SEARCH_TECH_REVIEW.md](/Users/dongeui/Desktop/chance/photome/docs/engineering/PHASE2_SEARCH_TECH_REVIEW.md)
+- [docs/ops/PACKAGING_STRATEGY.md](/Users/dongeui/Desktop/chance/photome/docs/ops/PACKAGING_STRATEGY.md)
 - [docs/qa/SCENARIO_VALIDATION_MATRIX.md](/Users/dongeui/Desktop/chance/photome/docs/qa/SCENARIO_VALIDATION_MATRIX.md)
 - [docs/integrations/GITHUB_AGENT_WEBHOOKS.md](/Users/dongeui/Desktop/chance/photome/docs/integrations/GITHUB_AGENT_WEBHOOKS.md)
 - [app/api/scan.py](/Users/dongeui/Desktop/chance/photome/app/api/scan.py)

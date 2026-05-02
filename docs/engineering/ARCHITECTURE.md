@@ -21,6 +21,8 @@ Phase 2 검색 종착지 설계와 기술 선택 기준은 `docs/engineering/PHA
 - macOS: optional menu bar shell controls the local service and opens the web UI
 - Windows: localhost web UI is the default operator surface
 - Docker / Compose remains an optional packaging and deployment path
+- distribution artifacts are split into base app and optional local AI pack
+- the base app must start and remain useful when the local AI pack is absent
 
 ## Source of Truth
 
@@ -53,7 +55,8 @@ Stage 1 — ingest and caching:
 Stage 2 — semantic enrichment and NL search:
 
 - `geocoding`: GPS 좌표 → 지명 계층 태그, 결과 캐시
-- `embedding`: 이미지 멀티모달 임베딩(CLIP/SigLIP) 추출 및 저장
+- `embedding`: 이미지 멀티모달 임베딩(CLIP/SigLIP) 추출 및 저장; enabled
+  only when the optional local AI pack and model cache are ready
 - `ocr`: 이미지 내 텍스트 추출
 - `caption` (선택): VLM 기반 자연어 캡션 생성
 - `semantic`: OCR/태그/사람/장소/신호/임베딩 ref를 `search_documents`로 집계
@@ -126,6 +129,30 @@ Terminal or divergent states:
 ## External Dependencies (Stage 2)
 
 - 역지오코딩: Nominatim 셀프호스트 또는 Kakao 로컬 API 중 택1, 환경변수 스위치
-- 임베딩 모델: SigLIP2 또는 OpenCLIP, HuggingFace weight 오프라인 캐시
+- 임베딩 모델: SigLIP2 또는 OpenCLIP, HuggingFace weight 오프라인 캐시.
+  배포 시 기본 앱에 포함하지 않고 optional local AI pack으로 분리한다.
 - LLM 쿼리 파서: 로컬 Ollama(Qwen 2.5) 또는 외부 API, JSON 스키마 강제
 - 벡터 인덱스: `VectorIndexBackend` 기준. 현재 local NumPy exact search, 확장 시 FAISS/LanceDB/Qdrant adapter
+
+## Packaging Boundary
+
+Photome stays one source repository. Packaging is split by capability:
+
+- `photome-base`: local service, web UI, Phase 1, OCR/tag/date/place/shadow search,
+  DB, scheduler, and dashboard
+- `photome-local-ai-pack`: PyTorch/OpenCLIP runtime, approved model weights, cache
+  verification, and AI model notices
+
+Versioning is multi-dimensional:
+
+- app version: server/UI/API behavior
+- semantic search version: `search_documents` composition
+- embedding version: vector provider/model/dimensions
+- auto tag version: concept thresholds and aliases
+- model pack version: bundled local AI runtime and model cache
+
+Changing model/provider/dimensions requires a new embedding version. Changing
+concept aliases or thresholds requires a new auto tag version. The base app must
+never require the local AI pack to scan, browse, or serve existing metadata.
+
+Operational packaging details live in `docs/ops/PACKAGING_STRATEGY.md`.

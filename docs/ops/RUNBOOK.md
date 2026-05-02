@@ -32,3 +32,24 @@
 - keep existing metadata readable
 - record scan failure and retry on next polling cycle
 
+## If Local AI Pack Is Missing
+
+- keep the base app running
+- keep Phase 1 scan, gallery, OCR/tag/date/place search, and dashboard usable
+- show local AI image search as `not installed` or `model missing`
+- do not attempt model download when `PHOTOME_OFFLINE_MODE=1`
+- skip CLIP embedding work in Phase 2 and record the skip reason
+- install/repair the optional local AI pack only through the online preparation flow
+
+## If Local AI Pack Is Installed
+
+- set model cache paths explicitly:
+  - `HF_HOME=<photome-data>/models/hf`
+  - `TORCH_HOME=<photome-data>/models/torch`
+- verify offline load before enabling scheduled Phase 2 CLIP work
+- run with:
+  - `PHOTOME_CLIP_ENABLED=1`
+  - `PHOTOME_OFFLINE_MODE=1`
+  - `HF_HUB_OFFLINE=1`
+  - `TRANSFORMERS_OFFLINE=1`
+- if the model/provider changes, bump embedding version and rebuild embeddings
