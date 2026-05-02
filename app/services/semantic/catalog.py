@@ -29,6 +29,7 @@ from app.models.semantic import (
 from app.models.tag import Tag
 from app.services.caption import CaptionResult
 from app.services.ocr import OCRBlock, OCRResult
+from app.services.search.query_translate import LEXICON
 
 
 class SemanticCatalog:
@@ -195,6 +196,7 @@ class SemanticCatalog:
         ]
         caption_parts = _caption_terms(caption)
         date_terms = _datetime_terms(media_file.exif_datetime)
+        tag_english = _tag_english_expansions(tags)
         semantic_parts = [
             media_file.filename,
             annotation.title if annotation else None,
@@ -203,6 +205,7 @@ class SemanticCatalog:
             *_signal_terms(signals),
             *caption_parts,
             *date_terms,
+            *tag_english,
         ]
         search_text = _join_text([*keyword_parts, *semantic_parts])
         source_updated_at = _max_datetime(
@@ -287,8 +290,6 @@ class SemanticCatalog:
         return list(self._session.scalars(statement))
 
     def _upsert_search_document_fts(self, row: SearchDocument) -> None:
-        if self._session.bind is None or self._session.bind.dialect.name != "sqlite":
-            return
         params = {
             "file_id": row.file_id,
             "search_text": row.search_text,
@@ -413,6 +414,22 @@ def _signal_terms(signals: dict) -> list[str]:
     if int(signals.get("face_count") or 0) > 0:
         terms.extend(["face", "person", "people", "얼굴", "사람", "인물"])
     return terms
+
+
+def _tag_english_expansions(tags: list[Tag]) -> list[str]:
+    """Return English LEXICON translations of Korean tag values for FTS indexing.
+
+    Pre-computing translations at index time lets FTS5 match English queries
+    ("ocean", "beach") against Korean-tagged photos without CLIP at query time.
+    """
+    seen: set[str] = set()
+    expansions: list[str] = []
+    for tag in tags:
+        translation = LEXICON.get(tag.tag_value.casefold())
+        if translation and translation not in seen:
+            seen.add(translation)
+            expansions.append(translation)
+    return expansions
 
 
 def _max_datetime(*values: datetime | None) -> datetime | None:
