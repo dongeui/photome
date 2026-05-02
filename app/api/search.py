@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import require_state
 from app.api.status import _security_snapshot
@@ -20,6 +22,7 @@ from app.services.search.vector import invalidate_global_vector_index
 
 
 router = APIRouter(tags=["search"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/search")
@@ -143,7 +146,11 @@ def _search_payload(
             debug=debug,
             weight_overrides=weight_overrides,
         )
-        session.commit()
+        try:
+            session.commit()
+        except SQLAlchemyError as exc:
+            session.rollback()
+            logger.warning("search event persistence skipped", extra={"error": str(exc), "query": q})
     return {
         "items": items,
         "total": len(items),

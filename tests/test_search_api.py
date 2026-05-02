@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy import func, select, text
 
 from app.core.settings import load_settings
@@ -79,6 +80,29 @@ def test_search_finds_scanned_media_by_filename_and_semantic_rows_exist(
             text("SELECT file_id FROM search_documents_fts WHERE search_documents_fts MATCH 'receipt'")
         ).all()
         assert indexed == [(file_id,)]
+
+
+def test_search_tolerates_event_commit_failure(
+    client: TestClient,
+    source_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_image(source_root / "commit-failure-receipt.jpg")
+    scan_twice(client)
+
+    original_commit = client.app.state.database.session_factory.class_.commit
+
+    def flaky_commit(session):  # type: ignore[no-untyped-def]
+        raise PendingRollbackError("locked session")
+
+    monkeypatch.setattr(client.app.state.database.session_factory.class_, "commit", flaky_commit)
+    try:
+        response = client.get("/search", params={"q": "receipt"})
+    finally:
+        monkeypatch.setattr(client.app.state.database.session_factory.class_, "commit", original_commit)
+
+    assert response.status_code == 200
+    assert response.json()["total"] >= 1
 
 
 def test_offline_mode_disables_outbound_features(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
