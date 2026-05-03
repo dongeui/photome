@@ -18,7 +18,9 @@ from app.main import create_app
 from app.models.job import ProcessingJob
 from app.models.media import MediaFile
 from app.models.runtime import SchedulerRuntimeConfig
-from app.models.semantic import MediaAnalysisSignal, MediaOCR, SearchDocument, SearchEvent
+from app.core.contracts import MediaTagInput
+from app.models.semantic import MediaAnalysisSignal, MediaEmbedding, MediaOCR, SearchDocument, SearchEvent
+from app.models.tag import Tag
 from app.services.caption.registry import get_caption_provider
 from app.services.processing.incremental import IncrementalScanSummary
 
@@ -200,6 +202,52 @@ def test_semantic_maintenance_only_builds_missing_search_documents(
     rebuilt = client.app.state.pipeline.run_semantic_maintenance()
     assert rebuilt["pending"] == 1
     assert rebuilt["succeeded"] == 1
+
+
+def test_semantic_maintenance_fills_missing_clip_embeddings_when_enabled(
+    client: TestClient,
+    source_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_image(source_root / "plain-photo.jpg")
+    scan_twice(client)
+
+    pipeline = client.app.state.pipeline
+    pipeline._semantic_clip_enabled = True
+
+    def fake_embedding(media_file: MediaFile) -> dict:
+        return {
+            "model_name": "ViT-B-32/openai",
+            "version": pipeline._semantic_embedding_version,
+            "embedding_ref": f"embeddings/clip/{pipeline._semantic_embedding_version}/aa/{media_file.file_id}.npy",
+            "dimensions": 3,
+            "checksum": None,
+        }
+
+    monkeypatch.setattr(pipeline, "_materialize_clip_embedding", fake_embedding)
+    from app.services.analysis import auto_tags
+
+    monkeypatch.setattr(
+        auto_tags,
+        "tags_from_embedding_file",
+        lambda *_args, **_kwargs: [MediaTagInput(tag_type="auto", tag_value="바다")],
+    )
+
+    result = pipeline.run_semantic_maintenance(batch_size=10)
+
+    assert result["succeeded"] >= 1
+    with client.app.state.database.session_factory() as session:
+        media_file = session.scalar(select(MediaFile).where(MediaFile.filename == "plain-photo.jpg"))
+        assert media_file is not None
+        assert session.scalar(select(MediaEmbedding).where(MediaEmbedding.file_id == media_file.file_id)) is not None
+        assert session.scalar(
+            select(func.count())
+            .select_from(Tag)
+            .where(Tag.file_id == media_file.file_id, Tag.tag_type == "auto", Tag.tag_value == "바다")
+        ) == 1
+        search_document = session.get(SearchDocument, media_file.file_id)
+        assert search_document is not None
+        assert "바다" in search_document.search_text
 
     second_no_op = client.post("/scan/semantic-maintenance").json()
     assert second_no_op["pending"] == 0

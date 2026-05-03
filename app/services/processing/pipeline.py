@@ -50,6 +50,20 @@ PLACE_TAG_TYPES = frozenset({"place", "location", "place_detail"})
 PERSON_TAG_TYPES = frozenset({"person", "people", "face"})
 
 
+def _merge_media_batches(*batches: list[MediaFile], limit: int) -> list[MediaFile]:
+    merged: list[MediaFile] = []
+    seen: set[str] = set()
+    for batch in batches:
+        for media_file in batch:
+            if media_file.file_id in seen:
+                continue
+            seen.add(media_file.file_id)
+            merged.append(media_file)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
 @dataclass(frozen=True)
 class PipelineSummary:
     job_id: str
@@ -352,17 +366,8 @@ class ProcessingPipeline:
 
             for index, media_file in enumerate(pending, start=1):
                 try:
-                    embedding_result = self._materialize_clip_embedding(media_file)
+                    embedding_result = self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
                     if embedding_result:
-                        semantic_catalog.register_embedding(media_file.file_id, **embedding_result)
-                        clip_rel = Path(embedding_result["embedding_ref"])
-                        catalog.register_derived_asset(
-                            media_file.file_id,
-                            DerivedAssetKind.CLIP_EMBEDDING,
-                            clip_rel,
-                            version=embedding_result["version"],
-                            content_type="application/octet-stream",
-                        )
                         embedding_tags = auto_tags.tags_from_embedding_file(
                             embedding_result["embedding_ref"],
                             self._embeddings_root,
@@ -427,11 +432,18 @@ class ProcessingPipeline:
         try:
             with self._session_factory() as session:
                 semantic_catalog = SemanticCatalog(session)
+                catalog = MediaCatalog(session)
                 pending = semantic_catalog.list_media_needing_search_document(
                     version=self._semantic_search_version,
                     limit=batch_size,
                     auto_tag_version=self._semantic_auto_tag_version if self._semantic_clip_enabled else None,
                 )
+                if self._semantic_clip_enabled and len(pending) < batch_size:
+                    pending = _merge_media_batches(
+                        pending,
+                        catalog.list_media_needing_embedding(limit=batch_size),
+                        limit=batch_size,
+                    )
                 succeeded = failed = 0
                 if progress_callback is not None:
                     progress_callback({
@@ -445,6 +457,8 @@ class ProcessingPipeline:
 
                 for index, media_file in enumerate(pending, start=1):
                     try:
+                        if self._semantic_clip_enabled:
+                            self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
                         self._refresh_auto_tags_from_existing_embedding(session, media_file)
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
                         succeeded += 1
@@ -894,6 +908,51 @@ class ProcessingPipeline:
 
         return result
 
+    def _ensure_clip_embedding(
+        self,
+        session: Session,
+        media_file: MediaFile,
+        catalog: MediaCatalog,
+        semantic_catalog: SemanticCatalog,
+    ) -> dict[str, Any] | None:
+        """Return an existing current CLIP embedding or create one.
+
+        Phase 2 maintenance uses this so enabling the local AI pack later will
+        keep filling semantic image data without requiring keyword-specific
+        manual jobs.
+        """
+        embedding = session.execute(
+            select(MediaEmbedding)
+            .where(
+                MediaEmbedding.file_id == media_file.file_id,
+                MediaEmbedding.version == self._semantic_embedding_version,
+            )
+            .order_by(MediaEmbedding.updated_at.desc(), MediaEmbedding.id.desc())
+        ).scalars().first()
+        if embedding is not None:
+            return {
+                "model_name": embedding.model_name,
+                "version": embedding.version,
+                "embedding_ref": embedding.embedding_ref,
+                "dimensions": embedding.dimensions,
+                "checksum": embedding.checksum,
+            }
+
+        embedding_result = self._materialize_clip_embedding(media_file)
+        if embedding_result is None:
+            return None
+
+        semantic_catalog.register_embedding(media_file.file_id, **embedding_result)
+        clip_rel = Path(embedding_result["embedding_ref"])
+        catalog.register_derived_asset(
+            media_file.file_id,
+            DerivedAssetKind.CLIP_EMBEDDING,
+            clip_rel,
+            version=embedding_result["version"],
+            content_type="application/octet-stream",
+        )
+        return embedding_result
+
     def _refresh_auto_tags_from_existing_embedding(self, session: Session, media_file: MediaFile) -> list[MediaTagInput]:
         """Rebuild Phase 2 auto-tags from persisted CLIP vectors when available."""
         if not self._semantic_clip_enabled:
@@ -931,7 +990,12 @@ class ProcessingPipeline:
         catalog = MediaCatalog(session)
         preserved_tags, place_tags, person_tags = self._split_existing_tags(media_file.tags)
         preserved_tags = [tag for tag in preserved_tags if tag.tag_type != "auto"]
-        merged = auto_tags.merge_auto_tags(embedding_tags)
+        existing_auto_tags = [
+            MediaTagInput(tag_type=tag.tag_type, tag_value=tag.tag_value)
+            for tag in media_file.tags
+            if tag.tag_type == "auto"
+        ]
+        merged = auto_tags.merge_auto_tags(existing_auto_tags, embedding_tags)
         catalog.replace_tags(media_file.file_id, preserved_tags + place_tags + person_tags + merged)
         SemanticCatalog(session).upsert_auto_tag_state(
             media_file.file_id,
