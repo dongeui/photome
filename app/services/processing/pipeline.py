@@ -470,6 +470,7 @@ class ProcessingPipeline:
                     limit=batch_size,
                     auto_tag_version=self._semantic_auto_tag_version if self._semantic_clip_enabled else None,
                 )
+                search_doc_pending_count = len(pending)
                 if self._semantic_clip_enabled and len(pending) < batch_size:
                     pending = _merge_media_batches(
                         pending,
@@ -551,12 +552,17 @@ class ProcessingPipeline:
                 from app.services.search.vocab import TagVocabularyCache
                 TagVocabularyCache.invalidate()
 
+            # has_more=True only when there are more files to process AND we made real progress.
+            # Without the embeddings_created guard, files that need CLIP but can't get it
+            # (model unavailable) keep filling the batch forever via list_media_needing_embedding.
+            batch_full = len(pending_ids) == batch_size
+            real_progress = search_doc_pending_count > 0 or embeddings_created > 0
             return {
                 "skipped": False,
                 "pending": len(pending_ids),
                 "succeeded": succeeded,
                 "failed": failed,
-                "has_more": len(pending_ids) == batch_size,
+                "has_more": batch_full and real_progress,
                 "version": self._semantic_search_version,
                 "embeddings_created": embeddings_created,
                 "auto_tag_files": auto_tag_files,
@@ -685,6 +691,11 @@ class ProcessingPipeline:
                 break
             if int(result.get("succeeded") or 0) == 0:
                 aggregate["stopped_reason"] = "no_successful_items_in_chunk"
+                break
+            # Allow external cancellation: check if job was marked cancelled in DB
+            session.expire(job)
+            if job.status not in (ProcessingJobState.RUNNING.value, ProcessingJobState.QUEUED.value):
+                aggregate["stopped_reason"] = "cancelled"
                 break
 
         return aggregate

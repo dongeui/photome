@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, s
 from sqlalchemy.exc import OperationalError
 
 from app.api.deps import require_state
+from app.core.contracts import ProcessingJobState
 from app.models.job import ProcessingJob
 from app.services.processing.pipeline import LibraryJobBusyError
 
@@ -155,6 +156,21 @@ async def trigger_semantic_maintenance_async(
         _raise_job_submission_busy(exc)
     background_tasks.add_task(pipeline.run_semantic_job, summary.job_id)
     return {"job": asdict(summary)}
+
+
+@router.post("/scan/jobs/{job_id}/cancel", status_code=200)
+async def cancel_job(request: Request, job_id: str) -> dict[str, Any]:
+    """Cancel a running library job. The job loop checks for this and exits cleanly."""
+    database = require_state(request, "database")
+    with database.session_factory() as session:
+        job = session.get(ProcessingJob, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status not in (ProcessingJobState.RUNNING.value, ProcessingJobState.QUEUED.value):
+            return {"job_id": job_id, "status": job.status, "message": "Job is not running"}
+        job.status = ProcessingJobState.CANCELED.value
+        session.commit()
+    return {"job_id": job_id, "status": ProcessingJobState.CANCELED.value, "message": "Cancellation requested"}
 
 
 def _parse_source_roots(*, source_root: Optional[List[str]], source_roots: Optional[str]) -> tuple[Path, ...] | None:

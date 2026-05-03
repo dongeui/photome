@@ -598,6 +598,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         <form class="scan-form" id="phase2-semantic-form">
           <div class="scan-actions">
             <button type="submit" id="phase2-semantic-button">Run Now</button>
+            <button type="button" id="phase2-cancel-button" style="display:none">Stop</button>
             <label>
               Mode
               <select id="phase2-semantic-mode" name="mode">
@@ -715,6 +716,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     const semanticResult = document.getElementById("phase2-semantic-result");
     const semanticCard = document.getElementById("phase2-card");
     const semanticButton = document.getElementById("phase2-semantic-button");
+    const semanticCancelButton = document.getElementById("phase2-cancel-button");
     const phase2ScheduleButton = document.getElementById("phase2-schedule-button");
     const phase1StorageKey = "photome.dashboard.phase1.job";
     const phase2StorageKey = "photome.dashboard.phase2.job";
@@ -1041,6 +1043,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       semanticResult.classList.add("visible");
       semanticCard.classList.add("is-running");
       semanticButton.disabled = true;
+      semanticCancelButton.style.display = "";
       semanticResult.textContent = "Starting semantic job...";
       const mode = document.getElementById("phase2-semantic-mode").value;
       const batchSize = document.getElementById("phase2-batch-size").value;
@@ -1065,11 +1068,28 @@ async def dashboard(request: Request) -> HTMLResponse:
         forgetJob(phase2StorageKey);
       }} finally {{
         semanticCard.classList.remove("is-running");
+        semanticCancelButton.style.display = "none";
         refreshDashboardStatus();
+      }}
+    }});
+    semanticCancelButton?.addEventListener("click", async () => {{
+      const jobId = loadRememberedJob(phase2StorageKey);
+      if (!jobId) return;
+      semanticCancelButton.disabled = true;
+      try {{
+        const response = await fetch(`/scan/jobs/${{encodeURIComponent(jobId)}}/cancel`, {{ method: "POST" }});
+        const payload = await response.json();
+        semanticResult.textContent = `Cancellation requested. Job will stop after current chunk.\n${{payload.message || ""}}`;
+      }} catch (error) {{
+        semanticResult.textContent = `Cancel error: ${{error.message}}`;
+      }} finally {{
+        semanticCancelButton.disabled = false;
       }}
     }});
     resumeJob(phase1StorageKey, scanCard, scanButton, scanResult, renderScanJob);
     resumeJob(phase2StorageKey, semanticCard, semanticButton, semanticResult, renderSemanticJob);
+    // Show cancel button if a job is already running from a previous session
+    if (loadRememberedJob(phase2StorageKey)) semanticCancelButton.style.display = "";
 
     const _INTENT_LABELS = {{
       "fallback": "스마트 검색", "date_relaxed": "날짜 범위 확대",
