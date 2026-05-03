@@ -536,8 +536,8 @@ async def dashboard(request: Request) -> HTMLResponse:
           <strong>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI</strong>
         </div>
         <div class="metric">
-          Waiting Stable
-          <strong>{health["waiting_stable"]}</strong>
+          Missing files
+          <strong>{health["missing"]}</strong>
         </div>
         <div class="metric">
           Errors
@@ -561,6 +561,7 @@ async def dashboard(request: Request) -> HTMLResponse:
           <div class="row"><span>Next poll</span><span>{escape(str(scheduler['next_poll_at']))}</span></div>
           <div class="row"><span>Last full scan</span><span>{escape(str(scheduler['last_full_scan_at']))}</span></div>
           <div class="row"><span>Next full scan</span><span>{escape(str(scheduler['next_full_scan_at']))}</span></div>
+          <div class="row"><span>Missing files</span><span class="{'status-warn' if health['missing'] else ''}">{health["missing"]} {'— re-run Scan Now to attempt re-detection' if health['missing'] else ''}</span></div>
         </div>
         <form class="scan-form" id="phase1-scan-form">
           <label>
@@ -1267,6 +1268,7 @@ async def status(request: Request) -> dict[str, Any]:
                 "database_configured": database.configured,
                 "waiting_stable": catalog.count_observations(status="waiting_stable"),
                 "error": catalog.count_media(status="error"),
+                "missing": catalog.count_media(status="missing"),
             },
         }
 
