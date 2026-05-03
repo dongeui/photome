@@ -91,7 +91,7 @@ async def read_scan_job(request: Request, job_id: str) -> dict[str, Any]:
 @router.post("/scan/semantic-backfill")
 async def trigger_semantic_backfill(
     request: Request,
-    batch_size: int = Query(default=50, ge=1, le=500),
+    batch_size: int = Query(default=50, ge=1, le=10000),
 ) -> dict[str, Any]:
     """Generate CLIP embeddings for any media that missed the semantic pass."""
     pipeline = require_state(request, "pipeline")
@@ -106,7 +106,7 @@ async def trigger_semantic_backfill(
 async def trigger_semantic_backfill_async(
     request: Request,
     background_tasks: BackgroundTasks,
-    batch_size: int = Query(default=50, ge=1, le=500),
+    batch_size: int = Query(default=50, ge=1, le=10000),
 ) -> dict[str, Any]:
     pipeline = require_state(request, "pipeline")
     try:
@@ -126,7 +126,7 @@ async def trigger_semantic_backfill_async(
 @router.post("/scan/semantic-maintenance")
 async def trigger_semantic_maintenance(
     request: Request,
-    batch_size: int = Query(default=100, ge=1, le=1000),
+    batch_size: int = Query(default=100, ge=1, le=10000),
 ) -> dict[str, Any]:
     """Refresh Phase 2 search documents for only stale or missing rows."""
     pipeline = require_state(request, "pipeline")
@@ -140,7 +140,7 @@ async def trigger_semantic_maintenance(
 async def trigger_semantic_maintenance_async(
     request: Request,
     background_tasks: BackgroundTasks,
-    batch_size: int = Query(default=100, ge=1, le=1000),
+    batch_size: int = Query(default=100, ge=1, le=10000),
 ) -> dict[str, Any]:
     pipeline = require_state(request, "pipeline")
     try:

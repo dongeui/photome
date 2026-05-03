@@ -606,7 +606,7 @@ async def dashboard(request: Request) -> HTMLResponse:
             </label>
             <label>
               Chunk size
-              <input type="number" id="phase2-batch-size" name="batch_size" min="1" max="1000" value="100">
+              <input type="number" id="phase2-batch-size" name="batch_size" min="1" max="10000" value="100">
             </label>
           </div>
           <pre class="scan-result" id="phase2-semantic-result" aria-live="polite"></pre>
