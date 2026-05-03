@@ -585,37 +585,12 @@ class ProcessingPipeline:
             job,
             stage="collecting",
             message="Collecting semantic work items.",
-            details={"mode": mode, "batch_size": batch_size},
+            details={"mode": mode, "batch_size": batch_size, "full_run": True},
         )
         session.commit()
 
         try:
-            if mode == "backfill":
-                result = self.run_semantic_backfill(
-                    batch_size=batch_size,
-                    progress_callback=lambda payload: self._set_job_progress(
-                        session,
-                        job,
-                        stage="processing",
-                        message="Generating semantic features.",
-                        details=payload,
-                        commit=True,
-                    ),
-                )
-            elif mode == "maintenance":
-                result = self.run_semantic_maintenance(
-                    batch_size=batch_size,
-                    progress_callback=lambda payload: self._set_job_progress(
-                        session,
-                        job,
-                        stage="processing",
-                        message="Refreshing search documents.",
-                        details=payload,
-                        commit=True,
-                    ),
-                )
-            else:
-                raise ValueError(f"Unknown semantic job mode: {mode}")
+            result = self._run_semantic_full_job(session, job, batch_size=batch_size, mode=mode)
         except Exception as exc:
             logger.exception("semantic job failed", extra={"job_id": job.id, "mode": mode})
             job.status = ProcessingJobState.FAILED.value
@@ -639,6 +614,80 @@ class ProcessingPipeline:
         job.finished_at = datetime.utcnow()
         session.commit()
         return result
+
+    def _run_semantic_full_job(
+        self,
+        session: Session,
+        job: ProcessingJob,
+        *,
+        batch_size: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        aggregate: dict[str, Any] = {
+            "skipped": False,
+            "pending": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "has_more": False,
+            "chunks": 0,
+            "batch_size": batch_size,
+            "full_run": True,
+            "embeddings_created": 0,
+            "auto_tag_files": 0,
+            "auto_tag_values": 0,
+            "search_documents_updated": 0,
+        }
+
+        def merge_result(result: dict[str, Any]) -> None:
+            aggregate["chunks"] += 1
+            aggregate["pending"] += int(result.get("pending") or 0)
+            aggregate["succeeded"] += int(result.get("succeeded") or 0)
+            aggregate["failed"] += int(result.get("failed") or 0)
+            aggregate["has_more"] = bool(result.get("has_more"))
+            aggregate["version"] = result.get("version") or aggregate.get("version")
+            aggregate["reason"] = result.get("reason") or aggregate.get("reason")
+            for key in ("embeddings_created", "auto_tag_files", "auto_tag_values", "search_documents_updated"):
+                aggregate[key] += int(result.get(key) or 0)
+
+        while True:
+            chunk_index = int(aggregate["chunks"]) + 1
+
+            def progress(payload: dict[str, Any]) -> None:
+                details = {
+                    **payload,
+                    "full_run": True,
+                    "chunk": chunk_index,
+                    "total_succeeded": aggregate["succeeded"] + int(payload.get("succeeded") or 0),
+                    "total_failed": aggregate["failed"] + int(payload.get("failed") or 0),
+                    "total_embeddings_created": aggregate["embeddings_created"] + int(payload.get("embeddings_created") or 0),
+                    "total_auto_tag_files": aggregate["auto_tag_files"] + int(payload.get("auto_tag_files") or 0),
+                    "total_auto_tag_values": aggregate["auto_tag_values"] + int(payload.get("auto_tag_values") or 0),
+                    "total_search_documents_updated": aggregate["search_documents_updated"] + int(payload.get("search_documents_updated") or 0),
+                }
+                self._set_job_progress(
+                    session,
+                    job,
+                    stage="processing",
+                    message="Refreshing full semantic library." if mode == "maintenance" else "Generating full semantic library.",
+                    details=details,
+                    commit=True,
+                )
+
+            if mode == "backfill":
+                result = self.run_semantic_backfill(batch_size=batch_size, progress_callback=progress)
+            elif mode == "maintenance":
+                result = self.run_semantic_maintenance(batch_size=batch_size, progress_callback=progress)
+            else:
+                raise ValueError(f"Unknown semantic job mode: {mode}")
+
+            merge_result(result)
+            if not result.get("has_more"):
+                break
+            if int(result.get("succeeded") or 0) == 0:
+                aggregate["stopped_reason"] = "no_successful_items_in_chunk"
+                break
+
+        return aggregate
 
     def status_snapshot(self) -> dict[str, Any]:
         with self._session_factory() as session:

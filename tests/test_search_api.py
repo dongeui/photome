@@ -204,6 +204,23 @@ def test_semantic_maintenance_only_builds_missing_search_documents(
     assert rebuilt["succeeded"] == 1
 
 
+def test_status_reports_phase2_coverage(
+    client: TestClient,
+    source_root: Path,
+) -> None:
+    create_image(source_root / "coverage-receipt.jpg")
+    scan_twice(client)
+
+    payload = client.get("/status").json()
+    coverage = payload["semantic"]["coverage"]
+
+    assert coverage["eligible_media"] >= 1
+    assert coverage["search_current"] >= 1
+    assert coverage["remaining_for_search"] >= 0
+    assert "clip_embeddings_current" in coverage
+    assert "semantic_job_errors" in coverage
+
+
 def test_semantic_maintenance_fills_missing_clip_embeddings_when_enabled(
     client: TestClient,
     source_root: Path,
@@ -808,6 +825,75 @@ def test_run_semantic_job_persists_running_state_before_long_work(
     result = pipeline.run_semantic_job(summary.job_id)
 
     assert result.status == "succeeded"
+
+
+def test_async_semantic_job_runs_chunks_until_exhausted(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = client.app.state.pipeline
+    summary = pipeline.submit_semantic_maintenance_job(
+        batch_size=10,
+        run_now=False,
+        trigger="test",
+    )
+    chunks = [
+        {
+            "skipped": False,
+            "pending": 10,
+            "succeeded": 10,
+            "failed": 0,
+            "has_more": True,
+            "embeddings_created": 10,
+            "auto_tag_files": 4,
+            "auto_tag_values": 20,
+            "search_documents_updated": 10,
+        },
+        {
+            "skipped": False,
+            "pending": 3,
+            "succeeded": 3,
+            "failed": 0,
+            "has_more": False,
+            "embeddings_created": 3,
+            "auto_tag_files": 2,
+            "auto_tag_values": 8,
+            "search_documents_updated": 3,
+        },
+    ]
+    calls = {"count": 0}
+
+    def fake_maintenance(*, batch_size: int, progress_callback=None):  # type: ignore[no-untyped-def]
+        result = chunks[calls["count"]]
+        calls["count"] += 1
+        if progress_callback is not None:
+            progress_callback({
+                "mode": "maintenance",
+                "pending": result["pending"],
+                "current": result["pending"],
+                "succeeded": result["succeeded"],
+                "failed": result["failed"],
+                "batch_size": batch_size,
+                "embeddings_created": result["embeddings_created"],
+                "auto_tag_files": result["auto_tag_files"],
+                "auto_tag_values": result["auto_tag_values"],
+                "search_documents_updated": result["search_documents_updated"],
+            })
+        return result
+
+    monkeypatch.setattr(pipeline, "run_semantic_maintenance", fake_maintenance)
+
+    result = pipeline.run_semantic_job(summary.job_id)
+
+    assert calls["count"] == 2
+    assert result.status == "succeeded"
+    assert result.result is not None
+    assert result.result["full_run"] is True
+    assert result.result["chunks"] == 2
+    assert result.result["succeeded"] == 13
+    assert result.result["embeddings_created"] == 13
+    assert result.result["auto_tag_values"] == 28
+    assert result.result["search_documents_updated"] == 13
 
 
 def test_scan_rejects_missing_source_root(client: TestClient, tmp_path: Path) -> None:

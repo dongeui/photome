@@ -19,7 +19,8 @@ from app.services.analysis.opencv_zoo import SFACE_MODEL, YU_NET_MODEL, _is_vali
 from app.services.embedding import clip as clip_embedding
 from app.services.processing.registry import MediaCatalog
 from app.models.job import ProcessingJob
-from app.models.semantic import SearchDocument
+from app.models.media import MediaFile
+from app.models.semantic import MediaAutoTagState, MediaEmbedding, SearchDocument
 from sqlalchemy import select
 from sqlalchemy import func
 
@@ -140,6 +141,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     active_library_job_json = json.dumps(jobs.get("active_library_job"), default=str)
     phase1_schedule_label = _schedule_label(payload["scheduler"].get("phase1_interval_hours"))
     phase2_schedule_label = _schedule_label(payload["scheduler"].get("phase2_interval_hours"))
+    semantic_coverage = semantic["coverage"]
     clip_dependency = next(
         (item for item in security["local_dependencies"] if item["name"] == "CLIP semantic embedding"),
         {"state": "unknown", "detail": "", "dependencies": {}, "cache": {}},
@@ -522,6 +524,18 @@ async def dashboard(request: Request) -> HTMLResponse:
           <strong>{catalog["total"]} items</strong>
         </div>
         <div class="metric">
+          Phase 2 Indexed
+          <strong>{semantic_coverage["search_current"]} / {semantic_coverage["eligible_media"]}</strong>
+        </div>
+        <div class="metric">
+          CLIP Embeddings
+          <strong>{semantic_coverage["clip_embeddings_current"]} / {semantic_coverage["eligible_media"]}</strong>
+        </div>
+        <div class="metric">
+          Phase 2 Remaining
+          <strong>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} clip</strong>
+        </div>
+        <div class="metric">
           Waiting Stable
           <strong>{health["waiting_stable"]}</strong>
         </div>
@@ -573,6 +587,12 @@ async def dashboard(request: Request) -> HTMLResponse:
         <div class="list" style="margin-top:14px;">
           <div class="row"><span>Last semantic maintenance</span><span>{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
           <div class="row"><span>Next semantic maintenance</span><span>{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
+          <div class="row"><span>Eligible media</span><span>{semantic_coverage["eligible_media"]}</span></div>
+          <div class="row"><span>Current CLIP embeddings</span><span>{semantic_coverage["clip_embeddings_current"]}</span></div>
+          <div class="row"><span>Current auto-tag states</span><span>{semantic_coverage["auto_tag_states_current"]}</span></div>
+          <div class="row"><span>Current search documents</span><span>{semantic_coverage["search_current"]}</span></div>
+          <div class="row"><span>Remaining</span><span>{semantic_coverage["remaining_for_search"]} search docs · {semantic_coverage["remaining_for_clip"]} clip embeddings</span></div>
+          <div class="row"><span>Phase 2 job errors</span><span>{semantic_coverage["semantic_job_errors"]}</span></div>
         </div>
         <form class="scan-form" id="phase2-semantic-form">
           <div class="scan-actions">
@@ -585,7 +605,7 @@ async def dashboard(request: Request) -> HTMLResponse:
               </select>
             </label>
             <label>
-              Batch size
+              Chunk size
               <input type="number" id="phase2-batch-size" name="batch_size" min="1" max="1000" value="100">
             </label>
           </div>
@@ -879,16 +899,26 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (progress.message) lines.push(progress.message);
         lines.push(`job: ${{job?.job_id || ""}}`);
         if (progress.mode) lines.push(`mode: ${{progress.mode}}`);
+        if (progress.full_run) lines.push(`scope: full library`);
+        if (progress.chunk !== undefined) lines.push(`chunk: ${{progress.chunk}}`);
         if (progress.pending !== undefined) lines.push(`pending: ${{progress.pending}}`);
         if (progress.current !== undefined) lines.push(`processed: ${{progress.current}} / ${{progress.pending ?? progress.current}}`);
         if (progress.succeeded !== undefined || progress.failed !== undefined) {{
           lines.push(`done: ${{progress.succeeded ?? 0}}, failed: ${{progress.failed ?? 0}}`);
+        }}
+        if (progress.total_succeeded !== undefined || progress.total_failed !== undefined) {{
+          lines.push(`total done: ${{progress.total_succeeded ?? 0}}, total failed: ${{progress.total_failed ?? 0}}`);
         }}
         if (progress.embeddings_created !== undefined) lines.push(`CLIP embeddings: +${{progress.embeddings_created}}`);
         if (progress.auto_tag_files !== undefined || progress.auto_tag_values !== undefined) {{
           lines.push(`auto tags: ${{progress.auto_tag_files ?? 0}} files, +${{progress.auto_tag_values ?? 0}} tags`);
         }}
         if (progress.search_documents_updated !== undefined) lines.push(`search docs: +${{progress.search_documents_updated}}`);
+        if (progress.total_embeddings_created !== undefined) lines.push(`total CLIP embeddings: +${{progress.total_embeddings_created}}`);
+        if (progress.total_auto_tag_files !== undefined || progress.total_auto_tag_values !== undefined) {{
+          lines.push(`total auto tags: ${{progress.total_auto_tag_files ?? 0}} files, +${{progress.total_auto_tag_values ?? 0}} tags`);
+        }}
+        if (progress.total_search_documents_updated !== undefined) lines.push(`total search docs: +${{progress.total_search_documents_updated}}`);
         const elapsed = formatElapsed(job?.started_at, job?.finished_at);
         if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
         return lines.join("\\n");
@@ -899,6 +929,8 @@ async def dashboard(request: Request) -> HTMLResponse:
         `succeeded: ${{result.succeeded ?? 0}}`,
         `failed: ${{result.failed ?? 0}}`,
       );
+      if (result.full_run) lines.push(`scope: full library`);
+      if (result.chunks !== undefined) lines.push(`chunks: ${{result.chunks}}`);
       if (result.embeddings_created !== undefined) lines.push(`CLIP embeddings: +${{result.embeddings_created}}`);
       if (result.auto_tag_files !== undefined || result.auto_tag_values !== undefined) {{
         lines.push(`auto tags: ${{result.auto_tag_files ?? 0}} files, +${{result.auto_tag_values ?? 0}} tags`);
@@ -1076,6 +1108,56 @@ async def status(request: Request) -> dict[str, Any]:
     with database.session_factory() as session:
         catalog = MediaCatalog(session)
         pipeline_snapshot = pipeline.status_snapshot()
+        clip_model_identifier = f"{settings.semantic_clip_model_name}/{settings.semantic_clip_pretrained}"
+        eligible_media_count = int(
+            session.scalar(
+                select(func.count())
+                .select_from(MediaFile)
+                .where(
+                    MediaFile.status.in_(("thumb_done", "analysis_done")),
+                    MediaFile.media_kind.in_(("image", "video")),
+                )
+            )
+            or 0
+        )
+        clip_embeddings_current = int(
+            session.scalar(
+                select(func.count())
+                .select_from(MediaEmbedding)
+                .where(
+                    MediaEmbedding.model_name == clip_model_identifier,
+                    MediaEmbedding.version == settings.semantic_embedding_version,
+                )
+            )
+            or 0
+        )
+        auto_tag_states_current = int(
+            session.scalar(
+                select(func.count())
+                .select_from(MediaAutoTagState)
+                .where(MediaAutoTagState.version == settings.semantic_auto_tag_version)
+            )
+            or 0
+        )
+        search_documents_current = int(
+            session.scalar(
+                select(func.count())
+                .select_from(SearchDocument)
+                .where(SearchDocument.version == settings.semantic_search_version)
+            )
+            or 0
+        )
+        semantic_job_errors = int(
+            session.scalar(
+                select(func.count())
+                .select_from(ProcessingJob)
+                .where(
+                    ProcessingJob.job_kind.in_(("semantic_backfill", "semantic_maintenance")),
+                    ProcessingJob.status == "failed",
+                )
+            )
+            or 0
+        )
         recent_jobs = session.execute(
             select(ProcessingJob).order_by(ProcessingJob.updated_at.desc(), ProcessingJob.enqueued_at.desc()).limit(10)
         ).scalars().all()
@@ -1133,6 +1215,17 @@ async def status(request: Request) -> dict[str, Any]:
                 "search_documents": {
                     "total": int(session.scalar(select(func.count()).select_from(SearchDocument)) or 0),
                     "version": settings.semantic_search_version,
+                },
+                "coverage": {
+                    "eligible_media": eligible_media_count,
+                    "clip_embeddings_current": clip_embeddings_current,
+                    "auto_tag_states_current": auto_tag_states_current,
+                    "search_current": search_documents_current,
+                    "remaining_for_clip": max(0, eligible_media_count - clip_embeddings_current),
+                    "remaining_for_auto_tags": max(0, eligible_media_count - auto_tag_states_current),
+                    "remaining_for_search": max(0, eligible_media_count - search_documents_current),
+                    "semantic_job_errors": semantic_job_errors,
+                    "clip_model": clip_model_identifier,
                 },
             },
             "health": {
