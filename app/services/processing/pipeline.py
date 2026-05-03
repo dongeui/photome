@@ -350,7 +350,14 @@ class ProcessingPipeline:
 
         with self._session_factory() as session:
             catalog = MediaCatalog(session)
-            pending_ids = [media_file.file_id for media_file in catalog.list_media_needing_embedding(limit=batch_size)]
+            pending_ids = [
+                media_file.file_id
+                for media_file in catalog.list_media_needing_embedding(
+                    limit=batch_size,
+                    model_name=self._clip_model_identifier(),
+                    version=self._semantic_embedding_version,
+                )
+            ]
         succeeded = failed = embeddings_created = auto_tag_files = auto_tag_values = search_documents_updated = 0
 
         if progress_callback is not None:
@@ -466,7 +473,11 @@ class ProcessingPipeline:
                 if self._semantic_clip_enabled and len(pending) < batch_size:
                     pending = _merge_media_batches(
                         pending,
-                        catalog.list_media_needing_embedding(limit=batch_size),
+                        catalog.list_media_needing_embedding(
+                            limit=batch_size,
+                            model_name=self._clip_model_identifier(),
+                            version=self._semantic_embedding_version,
+                        ),
                         limit=batch_size,
                     )
                 pending_ids = [media_file.file_id for media_file in pending]

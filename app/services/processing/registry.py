@@ -629,9 +629,20 @@ class MediaCatalog:
             statement = statement.limit(max(1, limit))
         return list(self._session.scalars(statement))
 
-    def list_media_needing_embedding(self, *, limit: int | None = None) -> list[MediaFile]:
-        """Return processed media that have no CLIP embedding yet."""
-        has_embedding = select(MediaEmbedding.file_id).distinct().subquery()
+    def list_media_needing_embedding(
+        self,
+        *,
+        limit: int | None = None,
+        model_name: str | None = None,
+        version: str | None = None,
+    ) -> list[MediaFile]:
+        """Return processed media that have no matching CLIP embedding yet."""
+        embedding_query = select(MediaEmbedding.file_id)
+        if model_name is not None:
+            embedding_query = embedding_query.where(MediaEmbedding.model_name == model_name)
+        if version is not None:
+            embedding_query = embedding_query.where(MediaEmbedding.version == version)
+        has_embedding = embedding_query.distinct().subquery()
         statement = (
             select(MediaFile)
             .where(

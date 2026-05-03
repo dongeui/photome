@@ -316,6 +316,53 @@ def test_clip_embedding_reuse_requires_matching_model_name(
         assert {row.model_name for row in rows} == {"old-model/old-pretrained", "new-model/new-pretrained"}
 
 
+def test_embedding_pending_uses_current_model_and_version(
+    client: TestClient,
+    source_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_image(source_root / "pending-model-change.jpg")
+    scan_twice(client)
+
+    pipeline = client.app.state.pipeline
+    pipeline._semantic_clip_enabled = True
+
+    with client.app.state.database.session_factory() as session:
+        media_file = session.scalar(select(MediaFile).where(MediaFile.filename == "pending-model-change.jpg"))
+        assert media_file is not None
+        session.add(
+            MediaEmbedding(
+                file_id=media_file.file_id,
+                model_name="old-model/old-pretrained",
+                version=pipeline._semantic_embedding_version,
+                embedding_ref=f"embeddings/clip/{pipeline._semantic_embedding_version}/old/{media_file.file_id}.npy",
+                dimensions=3,
+            )
+        )
+        session.commit()
+
+    monkeypatch.setenv("PHOTOME_CLIP_MODEL_NAME", "new-model")
+    monkeypatch.setenv("PHOTOME_CLIP_PRETRAINED", "new-pretrained")
+    calls = {"count": 0}
+
+    def fake_embedding(media_file: MediaFile) -> dict:
+        calls["count"] += 1
+        return {
+            "model_name": pipeline._clip_model_identifier(),
+            "version": pipeline._semantic_embedding_version,
+            "embedding_ref": f"embeddings/clip/{pipeline._semantic_embedding_version}/new/{media_file.file_id}.npy",
+            "dimensions": 3,
+            "checksum": None,
+        }
+
+    monkeypatch.setattr(pipeline, "_materialize_clip_embedding", fake_embedding)
+
+    result = pipeline.run_semantic_maintenance(batch_size=10)
+
+    assert result["succeeded"] >= 1
+    assert calls["count"] == 1
+
+
 def test_search_event_is_persisted_after_search(
     client: TestClient,
     source_root: Path,
