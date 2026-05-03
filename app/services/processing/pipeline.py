@@ -553,6 +553,7 @@ class ProcessingPipeline:
                         stage="processing",
                         message="Generating semantic features.",
                         details=payload,
+                        commit=True,
                     ),
                 )
             elif mode == "maintenance":
@@ -564,6 +565,7 @@ class ProcessingPipeline:
                         stage="processing",
                         message="Refreshing search documents.",
                         details=payload,
+                        commit=True,
                     ),
                 )
             else:
@@ -772,6 +774,7 @@ class ProcessingPipeline:
         stage: str,
         message: str,
         details: dict[str, Any] | None = None,
+        commit: bool = False,
     ) -> None:
         current = dict(job.result_json or {})
         current["progress"] = {
@@ -781,6 +784,8 @@ class ProcessingPipeline:
         }
         job.result_json = current
         session.flush()
+        if commit:
+            session.commit()
 
     def _refresh_media_assets(self, session: Session, media_file: MediaFile) -> dict[str, Any]:
         catalog = MediaCatalog(session)
