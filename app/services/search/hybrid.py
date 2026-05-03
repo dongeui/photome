@@ -191,9 +191,6 @@ class HybridSearchService:
     ) -> tuple[list[dict], dict]:
         if not query.strip():
             return [], {"effective_mode": mode, "intent_reason": "empty"}
-        # Guard against degenerate queries (only punctuation / single character)
-        if not re.search(r"[A-Za-z가-힣0-9]{2,}", query):
-            return [], {"effective_mode": mode, "intent_reason": "degenerate"}
 
         # Cache only non-debug requests without caller-provided date filters
         use_cache = (
@@ -228,6 +225,12 @@ class HybridSearchService:
                 logger.warning("Failed to load tag vocabulary — search quality may be reduced: %s", exc)
         plan = plan_query(query, tag_vocab=tag_vocab)
         cleaned = plan.normalized_query
+        # Guard punctuation/noise while allowing meaningful one-character visual
+        # queries such as "꽃" when they are present in the packaged vocabulary.
+        if not re.search(r"[A-Za-z가-힣0-9]{2,}", query) and not (
+            plan.person_terms or plan.place_terms or plan.ocr_terms or plan.visual_terms
+        ):
+            return [], {"effective_mode": mode, "intent_reason": "degenerate"}
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
 
         # Auto-extract date range from natural language when caller didn't specify one
