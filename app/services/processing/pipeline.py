@@ -350,22 +350,28 @@ class ProcessingPipeline:
 
         with self._session_factory() as session:
             catalog = MediaCatalog(session)
-            pending = catalog.list_media_needing_embedding(limit=batch_size)
-            semantic_catalog = SemanticCatalog(session)
-            succeeded = failed = 0
+            pending_ids = [media_file.file_id for media_file in catalog.list_media_needing_embedding(limit=batch_size)]
+        succeeded = failed = 0
 
-            if progress_callback is not None:
-                progress_callback({
-                    "mode": "backfill",
-                    "pending": len(pending),
-                    "current": 0,
-                    "succeeded": 0,
-                    "failed": 0,
-                    "batch_size": batch_size,
-                })
+        if progress_callback is not None:
+            progress_callback({
+                "mode": "backfill",
+                "pending": len(pending_ids),
+                "current": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "batch_size": batch_size,
+            })
 
-            for index, media_file in enumerate(pending, start=1):
+        for index, file_id in enumerate(pending_ids, start=1):
+            with self._session_factory() as session:
                 try:
+                    catalog = MediaCatalog(session)
+                    semantic_catalog = SemanticCatalog(session)
+                    media_file = catalog.get_media(file_id)
+                    if media_file is None:
+                        failed += 1
+                        continue
                     embedding_result = self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
                     if embedding_result:
                         embedding_tags = auto_tags.tags_from_embedding_file(
@@ -386,34 +392,36 @@ class ProcessingPipeline:
                                 version=self._semantic_auto_tag_version,
                             )
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
+                        session.commit()
                         succeeded += 1
                     else:
+                        session.rollback()
                         failed += 1
                 except Exception as exc:
+                    session.rollback()
                     logger.warning(
                         "semantic backfill failed",
-                        extra={"file_id": media_file.file_id, "error": str(exc)},
+                        extra={"file_id": file_id, "error": str(exc)},
                     )
                     failed += 1
 
-                if progress_callback is not None and (index == 1 or index == len(pending) or index % 25 == 0):
-                    progress_callback({
-                        "mode": "backfill",
-                        "pending": len(pending),
-                        "current": index,
-                        "succeeded": succeeded,
-                        "failed": failed,
-                        "batch_size": batch_size,
-                    })
+            if progress_callback is not None and (index == 1 or index == len(pending_ids) or index % 25 == 0):
+                progress_callback({
+                    "mode": "backfill",
+                    "pending": len(pending_ids),
+                    "current": index,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "batch_size": batch_size,
+                })
 
-            session.commit()
-            return {
-                "skipped": False,
-                "pending": len(pending),
-                "succeeded": succeeded,
-                "failed": failed,
-                "has_more": len(pending) == batch_size,
-            }
+        return {
+            "skipped": False,
+            "pending": len(pending_ids),
+            "succeeded": succeeded,
+            "failed": failed,
+            "has_more": len(pending_ids) == batch_size,
+        }
 
     def run_semantic_maintenance(
         self,
@@ -444,62 +452,71 @@ class ProcessingPipeline:
                         catalog.list_media_needing_embedding(limit=batch_size),
                         limit=batch_size,
                     )
-                succeeded = failed = 0
-                if progress_callback is not None:
-                    progress_callback({
-                        "mode": "maintenance",
-                        "pending": len(pending),
-                        "current": 0,
-                        "succeeded": 0,
-                        "failed": 0,
-                        "batch_size": batch_size,
-                    })
+                pending_ids = [media_file.file_id for media_file in pending]
 
-                for index, media_file in enumerate(pending, start=1):
+            succeeded = failed = 0
+            if progress_callback is not None:
+                progress_callback({
+                    "mode": "maintenance",
+                    "pending": len(pending_ids),
+                    "current": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "batch_size": batch_size,
+                })
+
+            for index, file_id in enumerate(pending_ids, start=1):
+                with self._session_factory() as session:
                     try:
+                        semantic_catalog = SemanticCatalog(session)
+                        catalog = MediaCatalog(session)
+                        media_file = catalog.get_media(file_id)
+                        if media_file is None:
+                            failed += 1
+                            continue
                         if self._semantic_clip_enabled:
                             self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
                         self._refresh_auto_tags_from_existing_embedding(session, media_file)
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
+                        session.commit()
                         succeeded += 1
                     except Exception as exc:
+                        session.rollback()
                         logger.warning(
                             "semantic maintenance failed",
-                            extra={"file_id": media_file.file_id, "error": str(exc)},
+                            extra={"file_id": file_id, "error": str(exc)},
                         )
                         failed += 1
 
-                    if progress_callback is not None and (index == 1 or index == len(pending) or index % 25 == 0):
-                        progress_callback({
-                            "mode": "maintenance",
-                            "pending": len(pending),
-                            "current": index,
-                            "succeeded": succeeded,
-                            "failed": failed,
-                            "batch_size": batch_size,
-                        })
+                if progress_callback is not None and (index == 1 or index == len(pending_ids) or index % 25 == 0):
+                    progress_callback({
+                        "mode": "maintenance",
+                        "pending": len(pending_ids),
+                        "current": index,
+                        "succeeded": succeeded,
+                        "failed": failed,
+                        "batch_size": batch_size,
+                    })
 
-                session.commit()
+            # Invalidate caches so new content is immediately queryable
+            if succeeded > 0:
+                cleared = clear_query_cache()
+                logger.debug("semantic maintenance cleared %d cached queries", cleared)
+                if invalidate_global_vector_index():
+                    logger.debug("semantic maintenance invalidated FAISS index")
+                # Invalidate tag vocabulary cache so new place/person tags
+                # are immediately recognised in query planning
+                from app.services.search.vocab import TagVocabularyCache
+                TagVocabularyCache.invalidate()
 
-                # Invalidate caches so new content is immediately queryable
-                if succeeded > 0:
-                    cleared = clear_query_cache()
-                    logger.debug("semantic maintenance cleared %d cached queries", cleared)
-                    if invalidate_global_vector_index():
-                        logger.debug("semantic maintenance invalidated FAISS index")
-                    # Invalidate tag vocabulary cache so new place/person tags
-                    # are immediately recognised in query planning
-                    from app.services.search.vocab import TagVocabularyCache
-                    TagVocabularyCache.invalidate()
-
-                return {
-                    "skipped": False,
-                    "pending": len(pending),
-                    "succeeded": succeeded,
-                    "failed": failed,
-                    "has_more": len(pending) == batch_size,
-                    "version": self._semantic_search_version,
-                }
+            return {
+                "skipped": False,
+                "pending": len(pending_ids),
+                "succeeded": succeeded,
+                "failed": failed,
+                "has_more": len(pending_ids) == batch_size,
+                "version": self._semantic_search_version,
+            }
         finally:
             self._semantic_maintenance_lock.release()
 
