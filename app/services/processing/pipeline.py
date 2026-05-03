@@ -982,6 +982,7 @@ class ProcessingPipeline:
             select(MediaEmbedding)
             .where(
                 MediaEmbedding.file_id == media_file.file_id,
+                MediaEmbedding.model_name == self._clip_model_identifier(),
                 MediaEmbedding.version == self._semantic_embedding_version,
             )
             .order_by(MediaEmbedding.updated_at.desc(), MediaEmbedding.id.desc())
@@ -1020,6 +1021,7 @@ class ProcessingPipeline:
             select(MediaEmbedding)
             .where(
                 MediaEmbedding.file_id == media_file.file_id,
+                MediaEmbedding.model_name == self._clip_model_identifier(),
                 MediaEmbedding.version == self._semantic_embedding_version,
             )
             .order_by(MediaEmbedding.updated_at.desc(), MediaEmbedding.id.desc())
@@ -1102,12 +1104,16 @@ class ProcessingPipeline:
                 tmp_path.unlink(missing_ok=True)
 
         return {
-            "model_name": "ViT-B-32/openai",
+            "model_name": self._clip_model_identifier(),
             "version": self._semantic_embedding_version,
             "embedding_ref": str(relative_path),
             "dimensions": int(vector.size),
             "checksum": None,
         }
+
+    def _clip_model_identifier(self) -> str:
+        config = clip_embedding.model_config()
+        return f"{config['model_name']}/{config['pretrained']}"
 
     def _materialize_place_tags(self, media_file: MediaFile, *, session: Session | None = None) -> list[MediaTagInput]:
         metadata = media_file.metadata_json

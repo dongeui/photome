@@ -253,6 +253,69 @@ def test_semantic_maintenance_fills_missing_clip_embeddings_when_enabled(
     assert second_no_op["pending"] == 0
 
 
+def test_clip_embedding_reuse_requires_matching_model_name(
+    client: TestClient,
+    source_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_image(source_root / "model-change.jpg")
+    scan_twice(client)
+
+    pipeline = client.app.state.pipeline
+    pipeline._semantic_clip_enabled = True
+    calls = {"count": 0}
+
+    with client.app.state.database.session_factory() as session:
+        media_file = session.scalar(select(MediaFile).where(MediaFile.filename == "model-change.jpg"))
+        assert media_file is not None
+        session.add(
+            MediaEmbedding(
+                file_id=media_file.file_id,
+                model_name="old-model/old-pretrained",
+                version=pipeline._semantic_embedding_version,
+                embedding_ref=f"embeddings/clip/{pipeline._semantic_embedding_version}/old/{media_file.file_id}.npy",
+                dimensions=3,
+            )
+        )
+        session.commit()
+
+    monkeypatch.setenv("PHOTOME_CLIP_MODEL_NAME", "new-model")
+    monkeypatch.setenv("PHOTOME_CLIP_PRETRAINED", "new-pretrained")
+
+    def fake_embedding(media_file: MediaFile) -> dict:
+        calls["count"] += 1
+        return {
+            "model_name": pipeline._clip_model_identifier(),
+            "version": pipeline._semantic_embedding_version,
+            "embedding_ref": f"embeddings/clip/{pipeline._semantic_embedding_version}/new/{media_file.file_id}.npy",
+            "dimensions": 3,
+            "checksum": None,
+        }
+
+    monkeypatch.setattr(pipeline, "_materialize_clip_embedding", fake_embedding)
+
+    with client.app.state.database.session_factory() as session:
+        media_file = session.scalar(select(MediaFile).where(MediaFile.filename == "model-change.jpg"))
+        assert media_file is not None
+        from app.services.processing.registry import MediaCatalog
+        from app.services.semantic import SemanticCatalog
+
+        result = pipeline._ensure_clip_embedding(
+            session,
+            media_file,
+            MediaCatalog(session),
+            SemanticCatalog(session),
+        )
+        session.commit()
+
+    assert calls["count"] == 1
+    assert result is not None
+    assert result["model_name"] == "new-model/new-pretrained"
+    with client.app.state.database.session_factory() as session:
+        rows = session.scalars(select(MediaEmbedding).where(MediaEmbedding.file_id == media_file.file_id)).all()
+        assert {row.model_name for row in rows} == {"old-model/old-pretrained", "new-model/new-pretrained"}
+
+
 def test_search_event_is_persisted_after_search(
     client: TestClient,
     source_root: Path,
