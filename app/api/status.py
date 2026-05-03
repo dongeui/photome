@@ -128,6 +128,7 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request) -> HTMLResponse:
     payload = await status(request)
+    settings: AppSettings = require_state(request, "settings")
     scheduler = payload["scheduler"]
     semantic = payload["semantic"]
     catalog = payload["catalog"]
@@ -139,6 +140,14 @@ async def dashboard(request: Request) -> HTMLResponse:
     active_library_job_json = json.dumps(jobs.get("active_library_job"), default=str)
     phase1_schedule_label = _schedule_label(payload["scheduler"].get("phase1_interval_hours"))
     phase2_schedule_label = _schedule_label(payload["scheduler"].get("phase2_interval_hours"))
+    clip_dependency = next(
+        (item for item in security["local_dependencies"] if item["name"] == "CLIP semantic embedding"),
+        {"state": "unknown", "detail": "", "dependencies": {}, "cache": {}},
+    )
+    clip_deps = clip_dependency.get("dependencies") or {}
+    clip_cache = clip_dependency.get("cache") or {}
+    clip_ready = clip_dependency.get("state") == "ready"
+    clip_enabled = clip_dependency.get("state") != "disabled"
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -297,6 +306,11 @@ async def dashboard(request: Request) -> HTMLResponse:
       display: grid;
       gap: 10px;
     }}
+    .mini-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }}
     .row {{
       display: flex;
       justify-content: space-between;
@@ -305,6 +319,10 @@ async def dashboard(request: Request) -> HTMLResponse:
       border-radius: 16px;
       background: rgba(19,32,42,0.04);
       font-size: .92rem;
+    }}
+    .row span:last-child {{
+      overflow-wrap: anywhere;
+      text-align: right;
     }}
     .scan-form {{
       display: grid;
@@ -474,6 +492,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       .hero {{ grid-template-columns: 1fr; }}
       .card {{ grid-column: 1 / -1; }}
       .metric-grid {{ grid-template-columns: 1fr 1fr; }}
+      .mini-grid {{ grid-template-columns: 1fr; }}
       .debug-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     }}
     @media (max-width: 560px) {{
@@ -585,6 +604,31 @@ async def dashboard(request: Request) -> HTMLResponse:
           <span class="pill"><strong>Embedding</strong> <code>{escape(semantic['versions']['embedding'])}</code></span>
           <span class="pill"><strong>Auto Tags</strong> <code>{escape(semantic['versions']['auto_tags'])}</code></span>
           <span class="pill"><strong>Search</strong> <code>{escape(semantic['versions']['search'])}</code></span>
+        </div>
+      </article>
+
+      <article class="card full">
+        <h2>Local AI Image Search</h2>
+        <p class="sub">Optional local CLIP pack status. Base mode remains usable when this is disabled or missing.</p>
+        <div class="pill-row">
+          <span class="pill"><strong>State</strong> <span class="{'status-ok' if clip_ready else 'status-warn'}">{escape(str(clip_dependency.get("state")))}</span></span>
+          <span class="pill"><strong>Mode</strong> {'enabled' if clip_enabled else 'base'}</span>
+          <span class="pill"><strong>Model</strong> {escape(settings.semantic_clip_model_name)} / {escape(settings.semantic_clip_pretrained)}</span>
+        </div>
+        <div class="mini-grid" style="margin-top:14px;">
+          <div class="list">
+            <div class="row"><span>open_clip_torch</span><span>{escape(str(clip_deps.get("open_clip_torch", "unknown")))}</span></div>
+            <div class="row"><span>torch</span><span>{escape(str(clip_deps.get("torch", "unknown")))}</span></div>
+            <div class="row"><span>torchvision</span><span>{escape(str(clip_deps.get("torchvision", "unknown")))}</span></div>
+          </div>
+          <div class="list">
+            <div class="row"><span>HF_HOME</span><span><code>{escape(str(clip_cache.get("hf_home") or "not set"))}</code></span></div>
+            <div class="row"><span>TORCH_HOME</span><span><code>{escape(str(clip_cache.get("torch_home") or "not set"))}</code></span></div>
+            <div class="row"><span>Offline flags</span><span>{escape(str(clip_cache.get("hf_hub_offline") or "0"))} / {escape(str(clip_cache.get("transformers_offline") or "0"))}</span></div>
+          </div>
+        </div>
+        <div class="list" style="margin-top:10px;">
+          <div class="row"><span>Verify command</span><span><code>.venv/bin/python scripts/local_ai_pack.py status</code></span></div>
         </div>
       </article>
 
