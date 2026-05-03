@@ -240,3 +240,221 @@ place_aliases:
   경주시: 경주
   전주시: 전주
   수원시: 수원
+
+lexicon:
+  자전거: bicycle bike cycling
+  자동차: car automobile vehicle
+  차: car vehicle
+  사람: person people human
+  남자: man male person
+  남성: man male person
+  여자: woman female girl lady person portrait
+  여성: woman female girl lady person portrait
+  얼굴: face portrait person close-up selfie
+  셀카: selfie portrait face person
+  아기: baby infant toddler child kid newborn
+  애기: baby infant toddler child kid newborn
+  아이: child kid baby toddler
+  어린이: child kid toddler
+  엄마: mother mom woman family portrait
+  아빠: father dad man family portrait
+  할머니: grandmother elderly woman family portrait
+  할아버지: grandfather elderly man family portrait
+  가족: family group portrait people
+  친구: friends group people smiling
+  커플: couple love romantic portrait
+  강아지: dog puppy cute animal
+  고양이: cat kitten cute animal
+  꽃: flower floral bloom garden
+  나무: tree forest nature green
+  하늘: sky clouds blue
+  바다: sea ocean beach water waves coast seaside
+  바다사진: sea ocean beach water waves coast seaside
+  바닷가: seaside coast beach sea ocean
+  바닷물: sea water ocean waves
+  산: mountain hiking outdoor landscape
+  강: river stream water nature
+  공원: park outdoor green nature
+  해변: beach sand sea ocean coast
+  해안: coast seaside ocean beach
+  해수욕장: beach swimming sea ocean summer
+  숲: forest trees nature green
+  음식: food meal dish restaurant
+  밥: rice meal korean food
+  케이크: cake dessert birthday celebration sweet
+  커피: coffee cafe drink
+  초밥: sushi japanese food meal
+  치킨: chicken fried food meal
+  피자: pizza food meal
+  술: alcohol drink beer wine glass
+  생일: birthday cake celebration party happy
+  생일파티: birthday party celebration cake candles
+  결혼식: wedding ceremony couple formal
+  졸업: graduation ceremony diploma academic
+  졸업식: graduation ceremony diploma academic
+  파티: party celebration people happy
+  여행: travel trip landscape outdoor
+  여행사진: travel trip landscape outdoor
+  휴가: vacation travel leisure outdoor
+  운동: exercise sports outdoor fitness
+  등산: hiking mountain outdoor nature trail
+  수영: swimming pool water sport
+  캠핑: camping outdoor tent nature
+  카페: cafe coffee shop interior cozy
+  식당: restaurant food dining
+  집: home house indoor interior
+  학교: school classroom building
+  공항: airport travel terminal
+  해외: abroad overseas travel landmark
+  서울: Seoul Korea cityscape urban
+  제주: Jeju island beach Korea outdoor
+  영수증: receipt document text paper purchase
+  문서: document paper page text
+  화면: screen screenshot app interface
+  스크린샷: screenshot screen capture app
+  오류: error failure warning message screen
+  전송: send transfer submit button
+  실패: failure failed error warning
+  동의: agree consent accept button
+  확인: confirm ok check button
+  취소: cancel button
+  버튼: button interface screen
+  대화: chat conversation message screen
+  메시지: message chat text screen
+  크리스마스: Christmas holiday decoration tree
+  새해: new year celebration fireworks
+  추석: chuseok Korean holiday family traditional
+  설날: seollal Korean new year traditional
+  봄: spring flowers cherry blossom
+  여름: summer beach outdoor sunny hot
+  가을: autumn fall foliage orange leaves
+  겨울: winter snow cold ice
+  귀여운: cute adorable
+  웃는: smiling happy laughing
+  잠자는: sleeping resting
+  야경: night city lights cityscape
+  일출: sunrise dawn morning
+  일몰: sunset dusk evening
+  형: brother male family portrait
+  오빠: brother male family portrait
+  누나: sister female family portrait
+  언니: sister female family portrait
+  동생: sibling family portrait
+  남동생: younger brother male family portrait
+  여동생: younger sister female family portrait
+  조카: nephew niece child family portrait
+  남편: husband couple family portrait
+  아내: wife couple family portrait
+  강남: Gangnam Seoul Korea urban cityscape
+  홍대: Hongdae Seoul Korea street
+  명동: Myeongdong Seoul Korea street shopping
+  경복궁: Gyeongbokgung palace Korea traditional
+  인사동: Insadong Seoul Korea traditional street
+  이태원: Itaewon Seoul Korea street night
+  한강: Han River Seoul Korea park outdoor
+  속초: Sokcho Korea beach ocean
+  강릉: Gangneung Korea beach coffee
+  경주: Gyeongju Korea historic cultural
+  전주: Jeonju Korea traditional hanok
+  놀이공원: amusement park ride fun
+  동물원: zoo animal outdoor
+  소풍: picnic outdoor park nature
+  나들이: outing outdoor nature
+  드라이브: drive road trip car scenic
+  산책: walk stroll outdoor park
+  조깅: jogging running outdoor fitness
+  독서: reading book indoor
+  공연: performance concert stage
+  전시: exhibition gallery indoor art
+
+typo_corrections:
+  어르굴: 얼굴
+  얼구: 얼굴
+  얼굴ㄹ: 얼굴
+  얼굴사진: 얼굴 사진
+  여ㅈ: 여자
+  여잔: 여자
+  아긔: 아기
+  아가: 아기
+  애긔: 아기
+  베이비: 아기
+  바닷가사진: 바닷가 사진
+  바다사딘: 바다사진
+  멍멍이: 강아지
+  냥이: 고양이
+  야옹이: 고양이
+
+english_expansions:
+  face: face portrait person close-up selfie
+  faces: face portrait people person close-up selfie
+  portrait: portrait face person
+  selfie: selfie portrait face person
+  woman: woman female girl lady person portrait
+  women: woman female girl lady person portrait
+  female: woman female girl lady person portrait
+  girl: girl woman female person portrait
+  baby: baby infant toddler child kid newborn
+  infant: baby infant toddler child newborn
+  toddler: baby toddler child kid
+  child: child kid baby toddler
+  kid: child kid baby toddler
+  dog: dog puppy animal
+  cat: cat kitten animal
+  food: food meal dish restaurant
+  beach: beach sea ocean sand waves
+  sea: sea ocean beach water waves coast
+  ocean: ocean sea beach water waves coast
+  coast: coast seaside beach ocean sea
+  seaside: seaside coast beach ocean sea
+  water: water sea ocean river lake
+  mountain: mountain hiking outdoor landscape
+  travel: travel trip landmark outdoor
+  party: party celebration people happy
+  birthday: birthday cake celebration party
+  wedding: wedding ceremony couple formal
+  graduation: graduation ceremony diploma academic
+  family: family group portrait people
+  friends: friends group people smiling
+  sunset: sunset dusk evening orange sky
+  sunrise: sunrise dawn morning sky
+  snow: snow winter cold white
+  rain: rain wet weather outdoor
+  flower: flower floral bloom garden
+  sky: sky clouds blue outdoor
+
+clip_templates:
+  가족: a family together
+  엄마: a mother with family
+  아빠: a father with family
+  할머니: an elderly grandmother with family
+  할아버지: an elderly grandfather with family
+  아기: a cute baby infant
+  아이: a child playing
+  커플: a couple together romantic
+  친구: friends hanging out together
+  여행: a travel vacation trip
+  제주: Jeju island beach landscape Korea
+  바다: ocean beach waves sea coast water
+  바닷가: seaside coast beach sea ocean
+  해변: beach sand sea ocean coast
+  해안: coast seaside ocean beach
+  해수욕장: beach swimming sea ocean summer
+  산: mountain hiking outdoor scenic
+  공원: outdoor park green nature
+  카페: cozy cafe coffee shop interior
+  생일: birthday cake celebration party
+  결혼식: wedding ceremony formal couple
+  졸업식: graduation ceremony academic
+  파티: party celebration people
+  소풍: outdoor picnic park family
+  여름: summer outdoor sunny beach
+  겨울: winter snow cold scenery
+  봄: spring cherry blossom flowers
+  가을: autumn fall foliage leaves
+  야경: city lights night cityscape
+  일몰: sunset dusk orange sky
+  음식: food meal restaurant table
+  강아지: cute dog puppy pet
+  고양이: cute cat kitten pet
+  꽃: flowers garden bloom colorful
+  하늘: blue sky clouds outdoor

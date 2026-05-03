@@ -29,7 +29,9 @@ from app.models.semantic import (
 from app.models.tag import Tag
 from app.services.caption import CaptionResult
 from app.services.ocr import OCRBlock, OCRResult
-from app.services.search.query_translate import LEXICON
+from app.services.search.seed import lexicon
+
+LEXICON = lexicon()
 
 
 class SemanticCatalog:

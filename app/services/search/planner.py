@@ -5,40 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import logging
-from pathlib import Path
 import re
 from typing import TYPE_CHECKING
 
 from app.services.search import query_translate
+from app.services.search.seed import seed_dict, seed_list
 
 if TYPE_CHECKING:
     from app.services.search.vocab import TagVocabulary
 
 logger = logging.getLogger(__name__)
-_VOCAB_SEED_PATH = Path(__file__).with_name("vocab_seed.yaml")
-
-
-def _load_vocab_seed() -> dict:
-    try:
-        import yaml
-    except ImportError as exc:
-        logger.warning("PyYAML unavailable; search seed vocabulary disabled: %s", exc)
-        return {}
-    try:
-        with _VOCAB_SEED_PATH.open(encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception as exc:
-        logger.warning("Failed to load search seed vocabulary from %s: %s", _VOCAB_SEED_PATH, exc)
-        return {}
-
-
-_seed = _load_vocab_seed()
-
-PERSON_TERMS: set[str] = set(_seed.get("person_terms", []))
-OCR_TERMS: set[str] = set(_seed.get("ocr_terms", []))
-PLACE_TERMS: set[str] = set(_seed.get("place_terms", []))
-VISUAL_TERMS: set[str] = set(_seed.get("visual_terms", []))
-PLACE_ALIASES: dict[str, str] = _seed.get("place_aliases", {})
+PERSON_TERMS: set[str] = set(seed_list("person_terms"))
+OCR_TERMS: set[str] = set(seed_list("ocr_terms"))
+PLACE_TERMS: set[str] = set(seed_list("place_terms"))
+VISUAL_TERMS: set[str] = set(seed_list("visual_terms"))
+PLACE_ALIASES: dict[str, str] = seed_dict("place_aliases")
 
 DATE_STOP_TERMS = {
     "작년", "지난해", "재작년", "올해", "이번해",
