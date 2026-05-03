@@ -4,23 +4,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import logging
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING
-
-import yaml
 
 from app.services.search import query_translate
 
 if TYPE_CHECKING:
     from app.services.search.vocab import TagVocabulary
 
+logger = logging.getLogger(__name__)
 _VOCAB_SEED_PATH = Path(__file__).with_name("vocab_seed.yaml")
 
 
 def _load_vocab_seed() -> dict:
-    with _VOCAB_SEED_PATH.open(encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    try:
+        import yaml
+    except ImportError as exc:
+        logger.warning("PyYAML unavailable; search seed vocabulary disabled: %s", exc)
+        return {}
+    try:
+        with _VOCAB_SEED_PATH.open(encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as exc:
+        logger.warning("Failed to load search seed vocabulary from %s: %s", _VOCAB_SEED_PATH, exc)
+        return {}
 
 
 _seed = _load_vocab_seed()

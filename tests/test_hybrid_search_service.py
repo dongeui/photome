@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from importlib import resources
+
 from app.services.search.hybrid import HybridSearchService, resolve_effective_mode
 from app.services.search.planner import plan_query
 from app.services.search.query_translate import expand_for_clip, normalize_query
@@ -50,6 +52,13 @@ def test_korean_query_expands_for_clip() -> None:
 
     assert variants[0] == "자전거"
     assert any("bicycle" in variant for variant in variants)
+
+
+def test_search_seed_vocabulary_is_packaged() -> None:
+    seed = resources.files("app.services.search").joinpath("vocab_seed.yaml")
+
+    assert seed.is_file()
+    assert "visual_terms:" in seed.read_text(encoding="utf-8")
 
 
 def test_typo_query_normalizes_before_expansion() -> None:
