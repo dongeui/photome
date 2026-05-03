@@ -521,27 +521,27 @@ async def dashboard(request: Request) -> HTMLResponse:
       <div class="metric-grid">
         <div class="metric">
           Photos cataloged
-          <strong>{catalog["total"]} items</strong>
+          <strong id="m-catalog">{catalog["total"]} items</strong>
         </div>
         <div class="metric">
           Search indexed
-          <strong>{semantic_coverage["search_current"]} / {semantic_coverage["eligible_media"]}</strong>
+          <strong id="m-search">{semantic_coverage["search_current"]} / {semantic_coverage["eligible_media"]}</strong>
         </div>
         <div class="metric">
           AI embeddings
-          <strong>{semantic_coverage["clip_embeddings_current"]} / {semantic_coverage["eligible_media"]}</strong>
+          <strong id="m-clip">{semantic_coverage["clip_embeddings_current"]} / {semantic_coverage["eligible_media"]}</strong>
         </div>
         <div class="metric">
           Pending analysis
-          <strong>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI</strong>
+          <strong id="m-pending">{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI</strong>
         </div>
         <div class="metric">
           Missing files
-          <strong>{health["missing"]}</strong>
+          <strong id="m-missing">{health["missing"]}</strong>
         </div>
         <div class="metric">
           Errors
-          <strong>{health["error"]}</strong>
+          <strong id="m-errors">{health["error"]}</strong>
         </div>
       </div>
     </section>
@@ -557,11 +557,11 @@ async def dashboard(request: Request) -> HTMLResponse:
           <button type="button" class="pill pill-button" id="phase1-schedule-button" title="Click to cycle auto-run interval: Off → 6h → 12h → 24h"><strong>Auto-run</strong> {phase1_schedule_label}</button>
         </div>
         <div class="list" style="margin-top:14px;">
-          <div class="row"><span>Last poll</span><span>{escape(str(scheduler['last_poll_at']))}</span></div>
-          <div class="row"><span>Next poll</span><span>{escape(str(scheduler['next_poll_at']))}</span></div>
-          <div class="row"><span>Last full scan</span><span>{escape(str(scheduler['last_full_scan_at']))}</span></div>
-          <div class="row"><span>Next full scan</span><span>{escape(str(scheduler['next_full_scan_at']))}</span></div>
-          <div class="row"><span>Missing files</span><span class="{'status-warn' if health['missing'] else ''}">{health["missing"]} {'— re-run Scan Now to attempt re-detection' if health['missing'] else ''}</span></div>
+          <div class="row"><span>Last poll</span><span id="p1-last-poll">{escape(str(scheduler['last_poll_at']))}</span></div>
+          <div class="row"><span>Next poll</span><span id="p1-next-poll">{escape(str(scheduler['next_poll_at']))}</span></div>
+          <div class="row"><span>Last full scan</span><span id="p1-last-scan">{escape(str(scheduler['last_full_scan_at']))}</span></div>
+          <div class="row"><span>Next full scan</span><span id="p1-next-scan">{escape(str(scheduler['next_full_scan_at']))}</span></div>
+          <div class="row"><span>Missing files</span><span id="p1-missing" class="{'status-warn' if health['missing'] else ''}">{health["missing"]} {'— re-run Scan Now to attempt re-detection' if health['missing'] else ''}</span></div>
         </div>
         <form class="scan-form" id="phase1-scan-form">
           <label>
@@ -586,14 +586,14 @@ async def dashboard(request: Request) -> HTMLResponse:
           <span class="pill"><strong>Place Precision</strong> {semantic['runtime']['place_tag_precision']}</span>
         </div>
         <div class="list" style="margin-top:14px;">
-          <div class="row"><span>Last run</span><span>{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
-          <div class="row"><span>Next run</span><span>{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
-          <div class="row"><span>Eligible photos</span><span>{semantic_coverage["eligible_media"]}</span></div>
-          <div class="row"><span>AI embeddings done</span><span>{semantic_coverage["clip_embeddings_current"]}</span></div>
-          <div class="row"><span>Auto-tags done</span><span>{semantic_coverage["auto_tag_states_current"]}</span></div>
-          <div class="row"><span>Search indexed</span><span>{semantic_coverage["search_current"]}</span></div>
-          <div class="row"><span>Pending</span><span>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI embeddings</span></div>
-          <div class="row"><span>Job errors</span><span>{semantic_coverage["semantic_job_errors"]}</span></div>
+          <div class="row"><span>Last run</span><span id="p2-last-run">{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
+          <div class="row"><span>Next run</span><span id="p2-next-run">{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
+          <div class="row"><span>Eligible photos</span><span id="p2-eligible">{semantic_coverage["eligible_media"]}</span></div>
+          <div class="row"><span>AI embeddings done</span><span id="p2-clip">{semantic_coverage["clip_embeddings_current"]}</span></div>
+          <div class="row"><span>Auto-tags done</span><span id="p2-auto-tags">{semantic_coverage["auto_tag_states_current"]}</span></div>
+          <div class="row"><span>Search indexed</span><span id="p2-search">{semantic_coverage["search_current"]}</span></div>
+          <div class="row"><span>Pending</span><span id="p2-pending">{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI embeddings</span></div>
+          <div class="row"><span>Job errors</span><span id="p2-errors">{semantic_coverage["semantic_job_errors"]}</span></div>
         </div>
         <form class="scan-form" id="phase2-semantic-form">
           <div class="scan-actions">
@@ -744,12 +744,16 @@ async def dashboard(request: Request) -> HTMLResponse:
 
       if (phase2OwnsActive && !scanCard.classList.contains("is-running")) {{
         scanResult.classList.add("visible");
-        scanResult.textContent = `${{jobKindLabel(active.job_kind)}} is active. Phase 1 waits until it finishes.`;
+        scanResult.textContent = `${{jobKindLabel(active.job_kind)}} is running. Photo Library Scan waits until it finishes.`;
       }}
       if (phase1OwnsActive && !semanticCard.classList.contains("is-running")) {{
         semanticResult.classList.add("visible");
-        semanticResult.textContent = `${{jobKindLabel(active.job_kind)}} is active. Phase 2 waits until Phase 1 finishes.`;
+        semanticResult.textContent = `${{jobKindLabel(active.job_kind)}} is running. AI Analysis waits until it finishes.`;
       }}
+    }}
+    function _setText(id, text) {{
+      const el = document.getElementById(id);
+      if (el !== null) el.textContent = text;
     }}
     async function refreshDashboardStatus() {{
       try {{
@@ -757,9 +761,43 @@ async def dashboard(request: Request) -> HTMLResponse:
         const payload = await response.json();
         if (!response.ok) return;
         activeLibraryJob = payload?.jobs?.active_library_job || null;
-        const scheduler = payload?.scheduler || {{}};
-        if (phase1ScheduleButton) phase1ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
-        if (phase2ScheduleButton) phase2ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
+        const sched = payload?.scheduler || {{}};
+        const cov = payload?.semantic?.coverage || {{}};
+        const cat = payload?.catalog || {{}};
+        const health = payload?.health || {{}};
+
+        if (phase1ScheduleButton) phase1ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(sched.phase1_interval_hours)}}`;
+        if (phase2ScheduleButton) phase2ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(sched.phase2_interval_hours)}}`;
+
+        // Hero metrics
+        if (cat.total !== undefined) _setText("m-catalog", cat.total + " items");
+        if (cov.search_current !== undefined) _setText("m-search", cov.search_current + " / " + cov.eligible_media);
+        if (cov.clip_embeddings_current !== undefined) _setText("m-clip", cov.clip_embeddings_current + " / " + cov.eligible_media);
+        if (cov.remaining_for_search !== undefined) _setText("m-pending", cov.remaining_for_search + " search · " + cov.remaining_for_clip + " AI");
+        if (health.missing !== undefined) _setText("m-missing", health.missing);
+        if (health.error !== undefined) _setText("m-errors", health.error);
+
+        // Phase 1 card rows
+        if (sched.last_poll_at !== undefined) _setText("p1-last-poll", sched.last_poll_at ?? "—");
+        if (sched.next_poll_at !== undefined) _setText("p1-next-poll", sched.next_poll_at ?? "—");
+        if (sched.last_full_scan_at !== undefined) _setText("p1-last-scan", sched.last_full_scan_at ?? "—");
+        if (sched.next_full_scan_at !== undefined) _setText("p1-next-scan", sched.next_full_scan_at ?? "—");
+        const missingEl = document.getElementById("p1-missing");
+        if (missingEl && health.missing !== undefined) {{
+          missingEl.className = health.missing ? "status-warn" : "";
+          missingEl.textContent = health.missing + (health.missing ? " — re-run Scan Now to attempt re-detection" : "");
+        }}
+
+        // Phase 2 card rows
+        if (sched.last_semantic_maintenance_at !== undefined) _setText("p2-last-run", sched.last_semantic_maintenance_at ?? "—");
+        if (sched.next_semantic_maintenance_at !== undefined) _setText("p2-next-run", sched.next_semantic_maintenance_at ?? "—");
+        if (cov.eligible_media !== undefined) _setText("p2-eligible", cov.eligible_media);
+        if (cov.clip_embeddings_current !== undefined) _setText("p2-clip", cov.clip_embeddings_current);
+        if (cov.auto_tag_states_current !== undefined) _setText("p2-auto-tags", cov.auto_tag_states_current);
+        if (cov.search_current !== undefined) _setText("p2-search", cov.search_current);
+        if (cov.remaining_for_search !== undefined) _setText("p2-pending", cov.remaining_for_search + " search · " + cov.remaining_for_clip + " AI embeddings");
+        if (cov.semantic_job_errors !== undefined) _setText("p2-errors", cov.semantic_job_errors);
+
         updateLibraryJobGuards();
       }} catch (_error) {{}}
     }}
@@ -910,16 +948,16 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (progress.total_succeeded !== undefined || progress.total_failed !== undefined) {{
           lines.push(`total done: ${{progress.total_succeeded ?? 0}}, total failed: ${{progress.total_failed ?? 0}}`);
         }}
-        if (progress.embeddings_created !== undefined) lines.push(`CLIP embeddings: +${{progress.embeddings_created}}`);
+        if (progress.embeddings_created !== undefined) lines.push(`AI embeddings: +${{progress.embeddings_created}}`);
         if (progress.auto_tag_files !== undefined || progress.auto_tag_values !== undefined) {{
-          lines.push(`auto tags: ${{progress.auto_tag_files ?? 0}} files, +${{progress.auto_tag_values ?? 0}} tags`);
+          lines.push(`auto-tags: ${{progress.auto_tag_files ?? 0}} files, +${{progress.auto_tag_values ?? 0}} tags`);
         }}
-        if (progress.search_documents_updated !== undefined) lines.push(`search docs: +${{progress.search_documents_updated}}`);
-        if (progress.total_embeddings_created !== undefined) lines.push(`total CLIP embeddings: +${{progress.total_embeddings_created}}`);
+        if (progress.search_documents_updated !== undefined) lines.push(`search indexed: +${{progress.search_documents_updated}}`);
+        if (progress.total_embeddings_created !== undefined) lines.push(`total AI embeddings: +${{progress.total_embeddings_created}}`);
         if (progress.total_auto_tag_files !== undefined || progress.total_auto_tag_values !== undefined) {{
-          lines.push(`total auto tags: ${{progress.total_auto_tag_files ?? 0}} files, +${{progress.total_auto_tag_values ?? 0}} tags`);
+          lines.push(`total auto-tags: ${{progress.total_auto_tag_files ?? 0}} files, +${{progress.total_auto_tag_values ?? 0}} tags`);
         }}
-        if (progress.total_search_documents_updated !== undefined) lines.push(`total search docs: +${{progress.total_search_documents_updated}}`);
+        if (progress.total_search_documents_updated !== undefined) lines.push(`total search indexed: +${{progress.total_search_documents_updated}}`);
         const elapsed = formatElapsed(job?.started_at, job?.finished_at);
         if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
         return lines.join("\\n");
@@ -932,11 +970,11 @@ async def dashboard(request: Request) -> HTMLResponse:
       );
       if (result.full_run) lines.push(`scope: full library`);
       if (result.chunks !== undefined) lines.push(`chunks: ${{result.chunks}}`);
-      if (result.embeddings_created !== undefined) lines.push(`CLIP embeddings: +${{result.embeddings_created}}`);
+      if (result.embeddings_created !== undefined) lines.push(`AI embeddings: +${{result.embeddings_created}}`);
       if (result.auto_tag_files !== undefined || result.auto_tag_values !== undefined) {{
-        lines.push(`auto tags: ${{result.auto_tag_files ?? 0}} files, +${{result.auto_tag_values ?? 0}} tags`);
+        lines.push(`auto-tags: ${{result.auto_tag_files ?? 0}} files, +${{result.auto_tag_values ?? 0}} tags`);
       }}
-      if (result.search_documents_updated !== undefined) lines.push(`search docs: +${{result.search_documents_updated}}`);
+      if (result.search_documents_updated !== undefined) lines.push(`search indexed: +${{result.search_documents_updated}}`);
       const elapsed = formatElapsed(job?.started_at, job?.finished_at);
       if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
       if (result.has_more !== undefined) lines.push(`has_more: ${{result.has_more}}`);
@@ -960,7 +998,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       event.preventDefault();
       if (activeLibraryJob && ["queued", "running"].includes(activeLibraryJob.status || "") && activeLibraryJob.job_kind !== "scan") {{
         scanResult.classList.add("visible");
-        scanResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is active. Phase 1 waits until it finishes.`;
+        scanResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is running. Photo Library Scan waits until it finishes.`;
         return;
       }}
       scanResult.classList.add("visible");
@@ -997,7 +1035,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       event.preventDefault();
       if (activeLibraryJob && ["queued", "running"].includes(activeLibraryJob.status || "") && activeLibraryJob.job_kind !== "semantic_backfill" && activeLibraryJob.job_kind !== "semantic_maintenance") {{
         semanticResult.classList.add("visible");
-        semanticResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is active. Phase 2 waits until Phase 1 finishes.`;
+        semanticResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is running. AI Analysis waits until it finishes.`;
         return;
       }}
       semanticResult.classList.add("visible");
