@@ -508,11 +508,11 @@ async def dashboard(request: Request) -> HTMLResponse:
     <section class="hero">
         <div>
         <span class="eyebrow">Local Service Status</span>
-        <h1>Two loops, one library.</h1>
-        <p>Phase 1 keeps polling NAS originals into a stable local catalog. Phase 2 keeps scheduling semantic enrichment on top of cached media so new files and version changes keep flowing through without manual resets.</p>
+        <h1>Your photo library.</h1>
+        <p>Phase 1 scans your photo folders and keeps the catalog up to date. Phase 2 runs AI analysis — face recognition, place tagging, text extraction, and image search indexing — so every photo is findable.</p>
         <div class="pill-row" style="margin-top:14px;">
           <span class="pill"><strong>Runtime</strong> {escape(security["runtime_mode"])}</span>
-          <span class="pill"><strong>Outbound Network</strong> <span class="{'status-ok' if not security['outbound_network_enabled'] else 'status-warn'}">{'blocked' if not security['outbound_network_enabled'] else 'allowed'}</span></span>
+          <span class="pill"><strong>Network</strong> {'offline · blocked' if not security['outbound_network_enabled'] else 'online'}</span>
         </div>
         <div class="hero-links">
           <a class="link-btn" href="/gallery">Open Gallery</a>
@@ -520,20 +520,20 @@ async def dashboard(request: Request) -> HTMLResponse:
       </div>
       <div class="metric-grid">
         <div class="metric">
-          Phase 1 Catalog
+          Photos cataloged
           <strong>{catalog["total"]} items</strong>
         </div>
         <div class="metric">
-          Phase 2 Indexed
+          Search indexed
           <strong>{semantic_coverage["search_current"]} / {semantic_coverage["eligible_media"]}</strong>
         </div>
         <div class="metric">
-          CLIP Embeddings
+          AI embeddings
           <strong>{semantic_coverage["clip_embeddings_current"]} / {semantic_coverage["eligible_media"]}</strong>
         </div>
         <div class="metric">
-          Phase 2 Remaining
-          <strong>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} clip</strong>
+          Pending analysis
+          <strong>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI</strong>
         </div>
         <div class="metric">
           Waiting Stable
@@ -548,13 +548,13 @@ async def dashboard(request: Request) -> HTMLResponse:
 
     <section class="grid">
       <article class="card scan-card" id="phase1-card">
-        <h2 class="scan-title">Phase 1 Polling Loop</h2>
-        <p class="sub">Source-driven ingest from NAS originals into local cache and derived assets.</p>
+        <h2 class="scan-title">Photo Library Scan</h2>
+        <p class="sub">Scans your photo folders, imports new files, and keeps the catalog in sync with your originals.</p>
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if scheduler['enabled'] else 'status-warn'}">{escape(str(scheduler['enabled']))}</span></span>
           <span class="pill"><strong>Running</strong> <span class="{'status-ok' if scheduler['running'] else 'status-warn'}">{escape(str(scheduler['running']))}</span></span>
           <span class="pill"><strong>Poll</strong> {scheduler['poll_interval_seconds']}s</span>
-          <button type="button" class="pill pill-button" id="phase1-schedule-button"><strong>Schedule</strong> {phase1_schedule_label}</button>
+          <button type="button" class="pill pill-button" id="phase1-schedule-button" title="Click to cycle auto-run interval: Off → 6h → 12h → 24h"><strong>Auto-run</strong> {phase1_schedule_label}</button>
         </div>
         <div class="list" style="margin-top:14px;">
           <div class="row"><span>Last poll</span><span>{escape(str(scheduler['last_poll_at']))}</span></div>
@@ -568,40 +568,40 @@ async def dashboard(request: Request) -> HTMLResponse:
             <textarea id="phase1-source-roots" name="source_roots" spellcheck="false">{source_roots_text}</textarea>
           </label>
           <div class="scan-actions">
-            <button type="submit" id="phase1-scan-button">Run Phase 1 Scan</button>
+            <button type="submit" id="phase1-scan-button">Scan Now</button>
           </div>
           <pre class="scan-result" id="phase1-scan-result" aria-live="polite"></pre>
         </form>
       </article>
 
       <article class="card scan-card" id="phase2-card">
-        <h2 class="scan-title">Phase 2 Semantic Loop</h2>
-        <p class="sub">Catalog-driven semantic maintenance for tags, OCR, captions, embeddings, and search versions.</p>
+        <h2 class="scan-title">AI Analysis</h2>
+        <p class="sub">Runs face recognition, place tagging, text extraction, and image search indexing on your photos.</p>
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if semantic['scheduler_enabled'] else 'status-warn'}">{escape(str(semantic['scheduler_enabled']))}</span></span>
           <span class="pill"><strong>Interval</strong> {semantic['scheduler_interval_seconds']}s</span>
-          <button type="button" class="pill pill-button" id="phase2-schedule-button"><strong>Schedule</strong> {phase2_schedule_label}</button>
+          <button type="button" class="pill pill-button" id="phase2-schedule-button" title="Click to cycle auto-run interval: Off → 6h → 12h → 24h"><strong>Auto-run</strong> {phase2_schedule_label}</button>
           <span class="pill"><strong>Face Analysis</strong> <span class="{'status-ok' if semantic['runtime']['face_analysis_enabled'] else 'status-warn'}">{escape(str(semantic['runtime']['face_analysis_enabled']))}</span></span>
           <span class="pill"><strong>Place Precision</strong> {semantic['runtime']['place_tag_precision']}</span>
         </div>
         <div class="list" style="margin-top:14px;">
-          <div class="row"><span>Last semantic maintenance</span><span>{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
-          <div class="row"><span>Next semantic maintenance</span><span>{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
-          <div class="row"><span>Eligible media</span><span>{semantic_coverage["eligible_media"]}</span></div>
-          <div class="row"><span>Current CLIP embeddings</span><span>{semantic_coverage["clip_embeddings_current"]}</span></div>
-          <div class="row"><span>Current auto-tag states</span><span>{semantic_coverage["auto_tag_states_current"]}</span></div>
-          <div class="row"><span>Current search documents</span><span>{semantic_coverage["search_current"]}</span></div>
-          <div class="row"><span>Remaining</span><span>{semantic_coverage["remaining_for_search"]} search docs · {semantic_coverage["remaining_for_clip"]} clip embeddings</span></div>
-          <div class="row"><span>Phase 2 job errors</span><span>{semantic_coverage["semantic_job_errors"]}</span></div>
+          <div class="row"><span>Last run</span><span>{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
+          <div class="row"><span>Next run</span><span>{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
+          <div class="row"><span>Eligible photos</span><span>{semantic_coverage["eligible_media"]}</span></div>
+          <div class="row"><span>AI embeddings done</span><span>{semantic_coverage["clip_embeddings_current"]}</span></div>
+          <div class="row"><span>Auto-tags done</span><span>{semantic_coverage["auto_tag_states_current"]}</span></div>
+          <div class="row"><span>Search indexed</span><span>{semantic_coverage["search_current"]}</span></div>
+          <div class="row"><span>Pending</span><span>{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI embeddings</span></div>
+          <div class="row"><span>Job errors</span><span>{semantic_coverage["semantic_job_errors"]}</span></div>
         </div>
         <form class="scan-form" id="phase2-semantic-form">
           <div class="scan-actions">
-            <button type="submit" id="phase2-semantic-button">Run Phase 2 Job</button>
+            <button type="submit" id="phase2-semantic-button">Run Now</button>
             <label>
               Mode
               <select id="phase2-semantic-mode" name="mode">
-                <option value="maintenance" selected>maintenance</option>
-                <option value="backfill">backfill</option>
+                <option value="maintenance" selected>Incremental (new &amp; changed)</option>
+                <option value="backfill">Full library</option>
               </select>
             </label>
             <label>
@@ -614,8 +614,8 @@ async def dashboard(request: Request) -> HTMLResponse:
       </article>
 
       <article class="card full">
-        <h2>Semantic Version Set</h2>
-        <p class="sub">These versions define when cached semantic outputs can be rebuilt without touching Stage 1 identity or core cache.</p>
+        <h2>Processing Versions</h2>
+        <p class="sub">Current version stamp for each AI analysis step. When a version changes, affected photos are automatically re-processed.</p>
         <div class="pill-row">
           <span class="pill"><strong>Place</strong> <code>{escape(semantic['versions']['place'])}</code></span>
           <span class="pill"><strong>Person</strong> <code>{escape(semantic['versions']['person'])}</code></span>
@@ -629,7 +629,7 @@ async def dashboard(request: Request) -> HTMLResponse:
 
       <article class="card full">
         <h2>Local AI Image Search</h2>
-        <p class="sub">Optional local CLIP pack status. Base mode remains usable when this is disabled or missing.</p>
+        <p class="sub">Optional AI pack for visual similarity search. The base app works without it — install <code>photome-local-ai-pack</code> to enable.</p>
         <div class="pill-row">
           <span class="pill"><strong>State</strong> <span class="{'status-ok' if clip_ready else 'status-warn'}">{escape(str(clip_dependency.get("state")))}</span></span>
           <span class="pill"><strong>Mode</strong> {'enabled' if clip_enabled else 'base'}</span>
@@ -653,11 +653,11 @@ async def dashboard(request: Request) -> HTMLResponse:
       </article>
 
       <article class="card full">
-        <h2>Offline Security</h2>
-        <p class="sub">Local-only runtime guardrails and model prerequisites.</p>
+        <h2>System Tools</h2>
+        <p class="sub">Status of local tools and AI models required by photome.</p>
         <div class="pill-row">
           <span class="pill"><strong>Mode</strong> {escape(security["runtime_mode"])}</span>
-          <span class="pill"><strong>Network</strong> <span class="{'status-ok' if not security['outbound_network_enabled'] else 'status-warn'}">{'blocked' if not security['outbound_network_enabled'] else 'allowed'}</span></span>
+          <span class="pill"><strong>Network</strong> {'offline · blocked' if not security['outbound_network_enabled'] else 'online'}</span>
         </div>
         <div class="list" style="margin-top:14px;">
           {''.join(f'<div class="row"><span>{escape(item["name"])}</span><span>{escape(item["state"])}</span></div>' for item in security["local_dependencies"])}
@@ -667,7 +667,7 @@ async def dashboard(request: Request) -> HTMLResponse:
 
       <article class="card full">
         <h2>Source and Storage</h2>
-        <p class="sub">Native local runtime with localhost web UI, reading originals from NAS and writing rebuildable derived data locally.</p>
+        <p class="sub">Reads originals from your source folders and writes thumbnails and derived data to a local cache.</p>
         <div class="list">
           <div class="row"><span>Source roots</span><span>{'<br>'.join(escape(path) for path in source_roots)}</span></div>
           <div class="row"><span>Derived root</span><span><code>{escape(payload['storage']['derived_root'])}</code></span></div>
@@ -677,26 +677,26 @@ async def dashboard(request: Request) -> HTMLResponse:
       </article>
 
       <article class="card full">
-        <h2>Search Tuning</h2>
-        <p class="sub">Inspect query planning, channel candidates, weights, and fused ranking without leaving the dashboard.</p>
+        <h2>Search Inspector</h2>
+        <p class="sub">Enter any query to see how photome interprets it — which channels activate, what the planner detected, and why results rank the way they do. Leave the weight fields blank to use automatic defaults.</p>
         <form class="debug-form" id="search-debug-form">
           <div class="debug-grid">
             <input id="search-debug-query" name="q" placeholder="Search query" value="작년 여름 바다에서 가족이랑 찍은 사진">
             <select id="search-debug-mode" name="mode">
-              <option value="hybrid" selected>hybrid</option>
-              <option value="ocr">ocr</option>
-              <option value="semantic">semantic</option>
+              <option value="hybrid" selected>Auto (hybrid)</option>
+              <option value="ocr">Text / OCR</option>
+              <option value="semantic">Image AI</option>
             </select>
-            <input id="search-debug-place" name="place" placeholder="Place filter">
-            <input id="search-debug-w-ocr" name="w_ocr" placeholder="w_ocr" inputmode="decimal">
-            <input id="search-debug-w-clip" name="w_clip" placeholder="w_clip" inputmode="decimal">
-            <input id="search-debug-w-shadow" name="w_shadow" placeholder="w_shadow" inputmode="decimal">
-            <button type="submit">Inspect Search</button>
+            <input id="search-debug-place" name="place" placeholder="Place filter (optional)">
+            <input id="search-debug-w-ocr" name="w_ocr" placeholder="OCR weight" inputmode="decimal" title="Weight for text/OCR channel (0–1, blank = auto)">
+            <input id="search-debug-w-clip" name="w_clip" placeholder="AI weight" inputmode="decimal" title="Weight for AI image channel (0–1, blank = auto)">
+            <input id="search-debug-w-shadow" name="w_shadow" placeholder="Keyword weight" inputmode="decimal" title="Weight for keyword/tag channel (0–1, blank = auto)">
+            <button type="submit">Inspect</button>
           </div>
           <pre class="debug-result" id="search-debug-result" aria-live="polite"></pre>
         </form>
         <div class="benchmark-actions">
-          <button type="button" id="search-benchmark-run">Run Synthetic Benchmark</button>
+          <button type="button" id="search-benchmark-run">Run Search Quality Check</button>
           <div class="benchmark-summary" id="search-benchmark-summary"></div>
         </div>
         <pre class="debug-result" id="search-benchmark-result" aria-live="polite"></pre>
@@ -721,8 +721,8 @@ async def dashboard(request: Request) -> HTMLResponse:
     let activeLibraryJob = {active_library_job_json};
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     function jobKindLabel(kind) {{
-      if (kind === "scan") return "Phase 1 scan";
-      if (kind === "semantic_backfill" || kind === "semantic_maintenance") return "Phase 2 semantic job";
+      if (kind === "scan") return "Photo Library Scan";
+      if (kind === "semantic_backfill" || kind === "semantic_maintenance") return "AI Analysis";
       return "Library job";
     }}
     function scheduleLabel(hours) {{
@@ -757,8 +757,8 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (!response.ok) return;
         activeLibraryJob = payload?.jobs?.active_library_job || null;
         const scheduler = payload?.scheduler || {{}};
-        if (phase1ScheduleButton) phase1ScheduleButton.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
-        if (phase2ScheduleButton) phase2ScheduleButton.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
+        if (phase1ScheduleButton) phase1ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
+        if (phase2ScheduleButton) phase2ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
         updateLibraryJobGuards();
       }} catch (_error) {{}}
     }}
@@ -771,9 +771,9 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
         const scheduler = payload.scheduler || {{}};
         if (phase === "phase1") {{
-          button.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
+          button.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(scheduler.phase1_interval_hours)}}`;
         }} else {{
-          button.innerHTML = `<strong>Schedule</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
+          button.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(scheduler.phase2_interval_hours)}}`;
         }}
         await refreshDashboardStatus();
       }} catch (error) {{
@@ -1032,6 +1032,40 @@ async def dashboard(request: Request) -> HTMLResponse:
     resumeJob(phase1StorageKey, scanCard, scanButton, scanResult, renderScanJob);
     resumeJob(phase2StorageKey, semanticCard, semanticButton, semanticResult, renderSemanticJob);
 
+    const _INTENT_LABELS = {{
+      "fallback": "스마트 검색", "date_relaxed": "날짜 범위 확대",
+      "fuzzy_corrected": "유사어 보정", "auto-face": "얼굴·인물 검색",
+      "auto-travel": "여행 사진 검색", "auto-celebration": "행사 사진 검색",
+      "auto-mixed": "복합 검색", "auto-text-hint": "텍스트 검색",
+      "auto-screen-text": "화면·캡처 검색", "auto-code": "문서·코드 검색",
+      "auto-word-match": "단어 일치", "auto-phrase-code": "구문 일치",
+      "planner-ocr": "텍스트 추출", "planner-visual": "이미지 검색",
+      "manual": "직접 지정", "condition_visual_only": "키워드 검색",
+      "condition_place_only": "장소 검색", "condition_person_only": "인물 검색",
+      "empty": "검색어 없음", "degenerate": "검색 불가",
+    }};
+    function renderSearchMeta(meta) {{
+      if (!meta) return "(no result)";
+      const plan = meta.query_plan || {{}};
+      const reason = meta.intent_reason || "";
+      const label = _INTENT_LABELS[reason] || reason;
+      const modeLabel = {{ "hybrid": "자동", "ocr": "텍스트", "semantic": "이미지 AI" }}[meta.effective_mode] || meta.effective_mode;
+      const lines = [
+        `검색 방식: ${{modeLabel}} (${{label}})`,
+      ];
+      if ((plan.person_terms || []).length) lines.push(`인물: ${{plan.person_terms.join(", ")}}`);
+      if ((plan.place_terms || []).length) lines.push(`장소: ${{plan.place_terms.join(", ")}}`);
+      if (plan.date_from) lines.push(`날짜: ${{plan.date_from}}${{plan.date_to ? " ~ " + plan.date_to : ""}}`);
+      if (meta.fallback) lines.push(`재검색: ${{_INTENT_LABELS[meta.fallback] || meta.fallback}}`);
+      if (meta.fuzzy_corrected_query) lines.push(`보정된 검색어: "${{meta.fuzzy_corrected_query}}"`);
+      if (Object.keys(meta.weight_overrides || {{}}).length) {{
+        const w = meta.weight_overrides;
+        lines.push(`가중치 오버라이드: OCR=${{w.ocr ?? "—"}}  AI=${{w.clip ?? "—"}}  키워드=${{w.shadow ?? "—"}}`);
+      }}
+      lines.push("", "── 원시 데이터 ──");
+      lines.push(JSON.stringify(meta, null, 2));
+      return lines.join("\n");
+    }}
     const searchDebugForm = document.getElementById("search-debug-form");
     const searchDebugResult = document.getElementById("search-debug-result");
     searchDebugForm?.addEventListener("submit", async (event) => {{
@@ -1054,7 +1088,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         const response = await fetch(`/search/debug?${{params.toString()}}`);
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${{response.status}}`);
-        searchDebugResult.textContent = JSON.stringify(payload.meta, null, 2);
+        searchDebugResult.textContent = renderSearchMeta(payload.meta);
       }} catch (error) {{
         searchDebugResult.textContent = `error: ${{error.message}}`;
       }}
@@ -1083,7 +1117,8 @@ async def dashboard(request: Request) -> HTMLResponse:
         const failedChecks = Object.keys(payload.summary?.failed_checks || {{}}).length
           ? `, failed checks ${{JSON.stringify(payload.summary.failed_checks)}}`
           : "";
-        benchmarkSummary.textContent = `passed ${{payload.passed}} / ${{payload.total}}, failed ${{payload.failed}}${{overrideText}}${{failedChecks}}`;
+        const passIcon = payload.failed === 0 ? "✓" : "✗";
+        benchmarkSummary.textContent = `${{passIcon}} ${{payload.passed}} / ${{payload.total}} 통과, ${{payload.failed}} 실패${{overrideText}}${{failedChecks}}`;
         benchmarkResult.textContent = JSON.stringify({{
           summary: payload.summary,
           cases: payload.cases,

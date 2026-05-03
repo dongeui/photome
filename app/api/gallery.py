@@ -31,6 +31,34 @@ PAGE_SIZE = 48
 GALLERY_SEARCH_LIMIT = 500
 QUICK_SEARCH_TERMS = ("얼굴", "아기", "여자", "영수증", "화면", "baby", "receipt")
 
+_INTENT_REASON_LABELS: dict[str, str] = {
+    "fallback": "스마트 검색",
+    "date_relaxed": "날짜 범위 확대",
+    "fuzzy_corrected": "유사어 보정",
+    "auto-face": "얼굴·인물 검색",
+    "auto-travel": "여행 사진 검색",
+    "auto-celebration": "행사 사진 검색",
+    "auto-mixed": "복합 검색",
+    "auto-text-hint": "텍스트 검색",
+    "auto-screen-text": "화면·캡처 검색",
+    "auto-code": "문서·코드 검색",
+    "auto-word-match": "단어 일치",
+    "auto-phrase-code": "구문 일치",
+    "planner-ocr": "텍스트 추출",
+    "planner-visual": "이미지 검색",
+    "manual": "직접 지정",
+    "condition_visual_only": "키워드 검색",
+    "condition_place_only": "장소 검색",
+    "condition_person_only": "인물 검색",
+    "empty": "검색어 없음",
+    "degenerate": "검색 불가",
+}
+
+
+def _friendly_intent_label(search_meta: dict) -> str:
+    reason = search_meta.get("fallback") or search_meta.get("intent_reason", "")
+    return _INTENT_REASON_LABELS.get(reason, reason)
+
 
 @router.get("/", response_class=HTMLResponse)
 async def home_page(
@@ -646,8 +674,7 @@ async def gallery_page(
       <div class="brand">
         <h1>photome</h1>
         <div class="stat-strip">
-          <span class="stat-card"><strong>{total}</strong> items</span>
-          <span class="stat-card"><strong>{len(items)}</strong> cards</span>
+          <span class="stat-card"><strong>{total}</strong> {'results' if q else 'items'}</span>
           <span class="stat-card">Page <strong>{page}</strong>/{page_count}</span>
           <span class="stat-card">{escape(security["runtime_mode"])}</span>
           <span class="stat-card">{'network blocked' if not security['outbound_network_enabled'] else 'network allowed'}</span>
@@ -678,12 +705,12 @@ async def gallery_page(
         <label class="{'control-unavailable' if not person_available else ''}">
           Person
           <input type="text" name="person" value="{escape(person or '')}" list="person-options" placeholder="No person tags indexed yet"{" disabled" if not person_available else ""}>
-          <span class="control-note">{'Person tag filter is unavailable in this catalog.' if not person_available else 'Matches person-style tags when indexed.'}</span>
+          <span class="control-note">{'AI 분석을 실행하면 인물 필터를 사용할 수 있습니다 → <a href="/dashboard">Dashboard</a>' if not person_available else '인물 태그로 필터링합니다.'}</span>
         </label>
         <label class="{'control-unavailable' if not place_available else ''}">
           Place
           <input type="text" name="place" value="{escape(place or '')}" list="place-options" placeholder="No place tags indexed yet"{" disabled" if not place_available else ""}>
-          <span class="control-note">{'Place tag filter is unavailable in this catalog.' if not place_available else 'Matches place/location tags when indexed.'}</span>
+          <span class="control-note">{'AI 분석을 실행하면 장소 필터를 사용할 수 있습니다 → <a href="/dashboard">Dashboard</a>' if not place_available else '장소/위치 태그로 필터링합니다.'}</span>
         </label>
         <div class="actions">
           <button class="button" type="submit">Search</button>
@@ -976,7 +1003,7 @@ def _render_active_filter_summary(
     if q:
         filters.append(("Search", q))
         if search_meta:
-            filters.append(("Mode", f"{search_meta.get('effective_mode', 'hybrid')} / {search_meta.get('intent_reason', 'fallback')}"))
+            filters.append(("검색 방식", _friendly_intent_label(search_meta)))
     if media_type:
         filters.append(("Media", media_type))
     if date_from:
@@ -1000,9 +1027,7 @@ def _render_active_filter_summary(
 def _render_search_mode_pill(search_meta: dict[str, str] | None) -> str:
     if not search_meta:
         return ""
-    mode = search_meta.get("effective_mode", "hybrid")
-    reason = search_meta.get("intent_reason", "fallback")
-    return f'<span class="meta-pill">Search {escape(mode)} / {escape(reason)}</span>'
+    return f'<span class="meta-pill">{escape(_friendly_intent_label(search_meta))}</span>'
 
 
 def _page_url(request: Request, page: int) -> str:

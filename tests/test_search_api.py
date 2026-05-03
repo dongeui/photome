@@ -625,7 +625,7 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
 
     assert response.status_code == 200
     html = response.text
-    assert "Outbound Network" in html
+    assert "Network" in html
     assert 'const phase1StorageKey = "photome.dashboard.phase1.job";' in html
     assert 'const phase2StorageKey = "photome.dashboard.phase2.job";' in html
     assert 'const phase1SourceRootsStorageKey = "photome.dashboard.phase1.source_roots";' in html
@@ -634,7 +634,7 @@ def test_async_job_dashboard_restores_phase_cards_from_local_storage(client: Tes
     assert "setInterval(refreshDashboardStatus, 3000);" in html
     assert 'id="phase1-schedule-button"' in html
     assert 'id="phase2-schedule-button"' in html
-    assert "Offline Security" in html
+    assert "System Tools" in html
     assert 'id="phase1-full-scan"' not in html
     assert 'params.set("full_scan", "true");' in html
     assert "function formatElapsed(startedAt, finishedAt)" in html
