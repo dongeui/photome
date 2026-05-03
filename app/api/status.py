@@ -628,7 +628,7 @@ async def dashboard(request: Request) -> HTMLResponse:
           </div>
         </div>
         <div class="list" style="margin-top:10px;">
-          <div class="row"><span>Verify command</span><span><code>.venv/bin/python scripts/local_ai_pack.py status</code></span></div>
+          <div class="row"><span>Verify command</span><span><code>photome-local-ai-pack status</code></span></div>
         </div>
       </article>
 

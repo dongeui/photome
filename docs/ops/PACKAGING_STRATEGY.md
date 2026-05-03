@@ -146,9 +146,9 @@ Required implementation tasks:
   - cache root
   - embedding version derived from provider config
 - add a model preparation command:
-  - check optional dependencies with `scripts/local_ai_pack.py status`
-  - download/cache model while online with `scripts/local_ai_pack.py prepare`
-  - verify offline load with `scripts/local_ai_pack.py verify-offline`
+  - check optional dependencies with `photome-local-ai-pack status`
+  - download/cache model while online with `photome-local-ai-pack prepare`
+  - verify offline load with `photome-local-ai-pack verify-offline`
   - print model/cache paths and estimated size
 - add dashboard controls:
   - show AI pack readiness

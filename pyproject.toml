@@ -41,6 +41,7 @@ test = [
 
 [project.scripts]
 photome = "app.main:main"
+photome-local-ai-pack = "app.cli.local_ai_pack:main"
 
 [tool.setuptools]
 include-package-data = false
