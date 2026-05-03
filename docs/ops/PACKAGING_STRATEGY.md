@@ -146,9 +146,9 @@ Required implementation tasks:
   - cache root
   - embedding version derived from provider config
 - add a model preparation command:
-  - install/check optional dependencies
-  - download/cache model while online
-  - verify offline load
+  - check optional dependencies with `scripts/local_ai_pack.py status`
+  - download/cache model while online with `scripts/local_ai_pack.py prepare`
+  - verify offline load with `scripts/local_ai_pack.py verify-offline`
   - print model/cache paths and estimated size
 - add dashboard controls:
   - show AI pack readiness

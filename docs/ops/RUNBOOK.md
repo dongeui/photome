@@ -40,6 +40,8 @@
 - do not attempt model download when `PHOTOME_OFFLINE_MODE=1`
 - skip CLIP embedding work in Phase 2 and record the skip reason
 - install/repair the optional local AI pack only through the online preparation flow
+- inspect current state without loading the model:
+  - `.venv/bin/python scripts/local_ai_pack.py status`
 
 ## If Local AI Pack Is Installed
 
@@ -47,6 +49,10 @@
   - `HF_HOME=<photome-data>/models/hf`
   - `TORCH_HOME=<photome-data>/models/torch`
 - verify offline load before enabling scheduled Phase 2 CLIP work
+- online preparation:
+  - `.venv/bin/python scripts/local_ai_pack.py --cache-root <photome-data>/models prepare`
+- offline verification:
+  - `.venv/bin/python scripts/local_ai_pack.py --cache-root <photome-data>/models verify-offline`
 - run with:
   - `PHOTOME_CLIP_ENABLED=1`
   - `PHOTOME_OFFLINE_MODE=1`
