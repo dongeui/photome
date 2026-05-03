@@ -884,6 +884,11 @@ async def dashboard(request: Request) -> HTMLResponse:
         if (progress.succeeded !== undefined || progress.failed !== undefined) {{
           lines.push(`done: ${{progress.succeeded ?? 0}}, failed: ${{progress.failed ?? 0}}`);
         }}
+        if (progress.embeddings_created !== undefined) lines.push(`CLIP embeddings: +${{progress.embeddings_created}}`);
+        if (progress.auto_tag_files !== undefined || progress.auto_tag_values !== undefined) {{
+          lines.push(`auto tags: ${{progress.auto_tag_files ?? 0}} files, +${{progress.auto_tag_values ?? 0}} tags`);
+        }}
+        if (progress.search_documents_updated !== undefined) lines.push(`search docs: +${{progress.search_documents_updated}}`);
         const elapsed = formatElapsed(job?.started_at, job?.finished_at);
         if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
         return lines.join("\\n");
@@ -894,6 +899,11 @@ async def dashboard(request: Request) -> HTMLResponse:
         `succeeded: ${{result.succeeded ?? 0}}`,
         `failed: ${{result.failed ?? 0}}`,
       );
+      if (result.embeddings_created !== undefined) lines.push(`CLIP embeddings: +${{result.embeddings_created}}`);
+      if (result.auto_tag_files !== undefined || result.auto_tag_values !== undefined) {{
+        lines.push(`auto tags: ${{result.auto_tag_files ?? 0}} files, +${{result.auto_tag_values ?? 0}} tags`);
+      }}
+      if (result.search_documents_updated !== undefined) lines.push(`search docs: +${{result.search_documents_updated}}`);
       const elapsed = formatElapsed(job?.started_at, job?.finished_at);
       if (elapsed) lines.push(`elapsed: ${{elapsed}}`);
       if (result.has_more !== undefined) lines.push(`has_more: ${{result.has_more}}`);

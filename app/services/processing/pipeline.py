@@ -351,7 +351,7 @@ class ProcessingPipeline:
         with self._session_factory() as session:
             catalog = MediaCatalog(session)
             pending_ids = [media_file.file_id for media_file in catalog.list_media_needing_embedding(limit=batch_size)]
-        succeeded = failed = 0
+        succeeded = failed = embeddings_created = auto_tag_files = auto_tag_values = search_documents_updated = 0
 
         if progress_callback is not None:
             progress_callback({
@@ -361,6 +361,10 @@ class ProcessingPipeline:
                 "succeeded": 0,
                 "failed": 0,
                 "batch_size": batch_size,
+                "embeddings_created": 0,
+                "auto_tag_files": 0,
+                "auto_tag_values": 0,
+                "search_documents_updated": 0,
             })
 
         for index, file_id in enumerate(pending_ids, start=1):
@@ -374,11 +378,15 @@ class ProcessingPipeline:
                         continue
                     embedding_result = self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
                     if embedding_result:
+                        if embedding_result.get("_created"):
+                            embeddings_created += 1
                         embedding_tags = auto_tags.tags_from_embedding_file(
                             embedding_result["embedding_ref"],
                             self._embeddings_root,
                         )
                         if embedding_tags:
+                            auto_tag_files += 1
+                            auto_tag_values += len(embedding_tags)
                             existing_auto_tags = [
                                 MediaTagInput(tag_type=t.tag_type, tag_value=t.tag_value)
                                 for t in media_file.tags
@@ -392,6 +400,7 @@ class ProcessingPipeline:
                                 version=self._semantic_auto_tag_version,
                             )
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
+                        search_documents_updated += 1
                         session.commit()
                         succeeded += 1
                     else:
@@ -413,6 +422,10 @@ class ProcessingPipeline:
                     "succeeded": succeeded,
                     "failed": failed,
                     "batch_size": batch_size,
+                    "embeddings_created": embeddings_created,
+                    "auto_tag_files": auto_tag_files,
+                    "auto_tag_values": auto_tag_values,
+                    "search_documents_updated": search_documents_updated,
                 })
 
         return {
@@ -421,6 +434,10 @@ class ProcessingPipeline:
             "succeeded": succeeded,
             "failed": failed,
             "has_more": len(pending_ids) == batch_size,
+            "embeddings_created": embeddings_created,
+            "auto_tag_files": auto_tag_files,
+            "auto_tag_values": auto_tag_values,
+            "search_documents_updated": search_documents_updated,
         }
 
     def run_semantic_maintenance(
@@ -454,7 +471,7 @@ class ProcessingPipeline:
                     )
                 pending_ids = [media_file.file_id for media_file in pending]
 
-            succeeded = failed = 0
+            succeeded = failed = embeddings_created = auto_tag_files = auto_tag_values = search_documents_updated = 0
             if progress_callback is not None:
                 progress_callback({
                     "mode": "maintenance",
@@ -463,6 +480,10 @@ class ProcessingPipeline:
                     "succeeded": 0,
                     "failed": 0,
                     "batch_size": batch_size,
+                    "embeddings_created": 0,
+                    "auto_tag_files": 0,
+                    "auto_tag_values": 0,
+                    "search_documents_updated": 0,
                 })
 
             for index, file_id in enumerate(pending_ids, start=1):
@@ -475,9 +496,15 @@ class ProcessingPipeline:
                             failed += 1
                             continue
                         if self._semantic_clip_enabled:
-                            self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
-                        self._refresh_auto_tags_from_existing_embedding(session, media_file)
+                            embedding_result = self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
+                            if embedding_result and embedding_result.get("_created"):
+                                embeddings_created += 1
+                        refreshed_tags = self._refresh_auto_tags_from_existing_embedding(session, media_file)
+                        if refreshed_tags:
+                            auto_tag_files += 1
+                            auto_tag_values += len(refreshed_tags)
                         semantic_catalog.upsert_search_document(media_file, version=self._semantic_search_version)
+                        search_documents_updated += 1
                         session.commit()
                         succeeded += 1
                     except Exception as exc:
@@ -496,6 +523,10 @@ class ProcessingPipeline:
                         "succeeded": succeeded,
                         "failed": failed,
                         "batch_size": batch_size,
+                        "embeddings_created": embeddings_created,
+                        "auto_tag_files": auto_tag_files,
+                        "auto_tag_values": auto_tag_values,
+                        "search_documents_updated": search_documents_updated,
                     })
 
             # Invalidate caches so new content is immediately queryable
@@ -516,6 +547,10 @@ class ProcessingPipeline:
                 "failed": failed,
                 "has_more": len(pending_ids) == batch_size,
                 "version": self._semantic_search_version,
+                "embeddings_created": embeddings_created,
+                "auto_tag_files": auto_tag_files,
+                "auto_tag_values": auto_tag_values,
+                "search_documents_updated": search_documents_updated,
             }
         finally:
             self._semantic_maintenance_lock.release()
@@ -958,6 +993,7 @@ class ProcessingPipeline:
                 "embedding_ref": embedding.embedding_ref,
                 "dimensions": embedding.dimensions,
                 "checksum": embedding.checksum,
+                "_created": False,
             }
 
         embedding_result = self._materialize_clip_embedding(media_file)
@@ -973,6 +1009,7 @@ class ProcessingPipeline:
             version=embedding_result["version"],
             content_type="application/octet-stream",
         )
+        embedding_result["_created"] = True
         return embedding_result
 
     def _refresh_auto_tags_from_existing_embedding(self, session: Session, media_file: MediaFile) -> list[MediaTagInput]:
