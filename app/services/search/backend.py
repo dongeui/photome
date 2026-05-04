@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import datetime, time
 import logging
 import re
@@ -12,12 +13,16 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 import os
+import threading
 
 logger = logging.getLogger(__name__)
 
 # CLIP model has a 77-token limit; long queries degrade embedding quality.
 # Truncating at ~200 chars keeps the most relevant content within token budget.
 _CLIP_MAX_CHARS = 200
+_TEXT_EMBEDDING_CACHE_MAX_SIZE = int(os.environ.get("PHOTOME_TEXT_EMBEDDING_CACHE_MAX_SIZE", "512"))
+_text_embedding_cache: "OrderedDict[tuple[str, str], bytes]" = OrderedDict()
+_text_embedding_cache_lock = threading.Lock()
 
 # Warn once per process if FTS tables are missing
 _fts_warning_emitted = False
@@ -35,6 +40,34 @@ from app.services.search.planner import QueryPlan
 from app.services.search.vector import build_vector_index, VectorIndexBackend
 from app.services.search.hybrid import FACE_HINTS, TEXT_HINTS
 from app.services.search.synonyms import load_tag_synonyms
+
+
+def _clip_model_cache_key() -> str:
+    """Keep cached text embeddings isolated by the active CLIP provider."""
+    model_name = os.environ.get("PHOTOME_CLIP_MODEL_NAME", "ViT-B-32")
+    pretrained = os.environ.get("PHOTOME_CLIP_PRETRAINED", "openai")
+    return f"{model_name}/{pretrained}"
+
+
+def _text_embedding_cache_get(key: tuple[str, str]) -> bytes | None:
+    if _TEXT_EMBEDDING_CACHE_MAX_SIZE <= 0:
+        return None
+    with _text_embedding_cache_lock:
+        value = _text_embedding_cache.get(key)
+        if value is None:
+            return None
+        _text_embedding_cache.move_to_end(key)
+        return value
+
+
+def _text_embedding_cache_set(key: tuple[str, str], value: bytes) -> None:
+    if _TEXT_EMBEDDING_CACHE_MAX_SIZE <= 0:
+        return
+    with _text_embedding_cache_lock:
+        _text_embedding_cache[key] = value
+        _text_embedding_cache.move_to_end(key)
+        while len(_text_embedding_cache) > _TEXT_EMBEDDING_CACHE_MAX_SIZE:
+            _text_embedding_cache.popitem(last=False)
 
 
 class SqlAlchemyHybridSearchBackend:
@@ -515,11 +548,17 @@ class SqlAlchemyHybridSearchBackend:
     def encode_text(self, query: str) -> bytes:
         if not self._clip_enabled:
             return b""
+        truncated = query[:_CLIP_MAX_CHARS] if len(query) > _CLIP_MAX_CHARS else query
+        cache_key = (_clip_model_cache_key(), truncated)
+        cached = _text_embedding_cache_get(cache_key)
+        if cached is not None:
+            return cached
         try:
             clip_embedding.ensure_models()
-            # Truncate to CLIP's effective token budget (~77 tokens ≈ 200 chars)
-            truncated = query[:_CLIP_MAX_CHARS] if len(query) > _CLIP_MAX_CHARS else query
-            return clip_embedding.encode_text(truncated)
+            encoded = clip_embedding.encode_text(truncated)
+            if encoded:
+                _text_embedding_cache_set(cache_key, encoded)
+            return encoded
         except Exception:
             return b""
 
