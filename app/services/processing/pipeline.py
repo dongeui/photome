@@ -397,10 +397,12 @@ class ProcessingPipeline:
                             existing_auto_tags = [
                                 MediaTagInput(tag_type=t.tag_type, tag_value=t.tag_value)
                                 for t in media_file.tags
-                                if t.tag_type == "auto"
+                                if t.tag_type in auto_tags.AUTO_TAG_TYPES
                             ]
                             merged = auto_tags.merge_auto_tags(existing_auto_tags, embedding_tags)
-                            catalog.replace_tags_for_types(media_file.file_id, ["auto"], merged)
+                            catalog.replace_tags_for_types(
+                                media_file.file_id, list(auto_tags.AUTO_TAG_TYPES), merged
+                            )
                             semantic_catalog.upsert_auto_tag_state(
                                 media_file.file_id,
                                 tags=merged,
@@ -1121,11 +1123,11 @@ class ProcessingPipeline:
 
         catalog = MediaCatalog(session)
         preserved_tags, place_tags, person_tags = self._split_existing_tags(media_file.tags)
-        preserved_tags = [tag for tag in preserved_tags if tag.tag_type != "auto"]
+        preserved_tags = [tag for tag in preserved_tags if tag.tag_type not in auto_tags.AUTO_TAG_TYPES]
         existing_auto_tags = [
             MediaTagInput(tag_type=tag.tag_type, tag_value=tag.tag_value)
             for tag in media_file.tags
-            if tag.tag_type == "auto"
+            if tag.tag_type in auto_tags.AUTO_TAG_TYPES
         ]
         merged = auto_tags.merge_auto_tags(existing_auto_tags, embedding_tags)
         catalog.replace_tags(media_file.file_id, preserved_tags + place_tags + person_tags + merged)

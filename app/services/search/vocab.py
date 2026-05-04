@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Tag types that map to semantic categories
 # ---------------------------------------------------------------------------
-_PLACE_TAG_TYPES = {"place", "place_detail", "location", "geo"}
-_PERSON_TAG_TYPES = {"person", "people", "face"}
+_PLACE_TAG_TYPES = {"place", "place_detail", "location", "geo", "auto_scene"}
+_PERSON_TAG_TYPES = {"person", "people", "face", "auto_person"}
 
 # Cache TTL: re-query the DB after this many seconds.
 # 5 minutes is a good balance — new tags appear after semantic maintenance

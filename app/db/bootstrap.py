@@ -46,9 +46,59 @@ def build_database_state(settings: AppSettings) -> DatabaseState:
     engine = create_engine_for_settings(settings)
     Base.metadata.create_all(engine)
     _ensure_search_document_fts(engine)
+    _migrate_auto_tag_types(engine)
     session_factory = create_session_factory(engine)
     logger.info("database bootstrapped", extra={"database_url": settings.database_url})
     return DatabaseState(settings=settings, engine=engine, session_factory=session_factory)
+
+
+def _migrate_auto_tag_types(engine: Engine) -> None:
+    """One-time migration: reclassify tag_type='auto' rows into typed subtypes.
+
+    Safe to run on every startup — rows already reclassified are left untouched.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    _TYPE_MAP: dict[str, str] = {
+        # screen
+        "kakaotalk": "auto_screen", "screenshot": "auto_screen", "document": "auto_screen",
+        "receipt": "auto_screen", "text": "auto_screen", "screen": "auto_screen",
+        # person
+        "person": "auto_person", "baby": "auto_person", "woman": "auto_person",
+        "man": "auto_person", "child": "auto_person", "group": "auto_person",
+        "infant": "auto_person", "newborn": "auto_person", "toddler": "auto_person",
+        "female": "auto_person", "girl": "auto_person", "male": "auto_person",
+        "boy": "auto_person", "kid": "auto_person",
+        # event
+        "celebration": "auto_event", "wedding": "auto_event", "birthday": "auto_event",
+        # scene
+        "outdoor": "auto_scene", "beach": "auto_scene", "sea": "auto_scene",
+        "water": "auto_scene", "ocean": "auto_scene", "coast": "auto_scene",
+        "mountain": "auto_scene", "nature": "auto_scene", "sky": "auto_scene",
+        "travel": "auto_scene", "night": "auto_scene", "sunset": "auto_scene",
+        "spring": "auto_scene", "summer": "auto_scene", "autumn": "auto_scene",
+        "winter": "auto_scene",
+        # object
+        "food": "auto_object", "cake": "auto_object", "coffee": "auto_object",
+        "vehicle": "auto_object", "animal": "auto_object", "meal": "auto_object",
+    }
+    try:
+        with engine.begin() as conn:
+            for tag_value, new_type in _TYPE_MAP.items():
+                conn.execute(
+                    text(
+                        "UPDATE tags SET tag_type = :new_type "
+                        "WHERE tag_type = 'auto' AND LOWER(tag_value) = :tag_value"
+                    ),
+                    {"new_type": new_type, "tag_value": tag_value},
+                )
+            # Remaining unrecognised 'auto' rows become auto_scene as a safe default
+            conn.execute(
+                text("UPDATE tags SET tag_type = 'auto_scene' WHERE tag_type = 'auto'")
+            )
+        logger.info("auto tag type migration complete")
+    except Exception as exc:
+        logger.warning("auto tag type migration failed", extra={"error": str(exc)})
 
 
 def _ensure_search_document_fts(engine: Engine) -> None:
