@@ -14,7 +14,6 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import Select, exists, false, func, or_, select
 
 from app.api.deps import require_state
-from app.api.status import _security_snapshot
 from app.models.annotation import MediaAnnotation
 from app.models.asset import DerivedAsset
 from app.models.media import MediaFile
@@ -102,7 +101,6 @@ async def gallery_page(
 ) -> HTMLResponse:
     database = require_state(request, "database")
     settings = require_state(request, "settings")
-    security = _security_snapshot(settings)
     pipeline = require_state(request, "pipeline")
     log_events = not pipeline.has_active_library_job()
     offset = (page - 1) * PAGE_SIZE
@@ -216,11 +214,11 @@ async def gallery_page(
     )
 
     html = f"""<!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>photome gallery</title>
+  <title>photome 사진첩</title>
   <style>
     :root {{
       color-scheme: light;
@@ -735,8 +733,8 @@ async def gallery_page(
 <body>
   <div id="search-progress" class="search-progress" aria-live="polite" aria-atomic="true" hidden>
     <div class="search-progress-row">
-      <span>Searching your library</span>
-      <span>live</span>
+      <span>사진을 찾는 중입니다</span>
+      <span>검색 중</span>
     </div>
     <div class="search-progress-track" aria-hidden="true">
       <div class="search-progress-fill"></div>
@@ -745,61 +743,60 @@ async def gallery_page(
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <h1>photome</h1>
+        <h1>사진첩</h1>
         <div class="stat-strip">
-          <span class="stat-card"><strong>{total}</strong> {'results' if q else 'items'}</span>
-          <span class="stat-card">Page <strong>{page}</strong>/{page_count}</span>
-          <span class="stat-card">{escape(security["runtime_mode"])}</span>
-          <span class="stat-card">{'network blocked' if not security['outbound_network_enabled'] else 'network allowed'}</span>
+          <span class="stat-card"><strong>{total}</strong> {'개 결과' if q else '개 항목'}</span>
+          <span class="stat-card"><strong>{page}</strong> / {page_count}페이지</span>
+          <span class="stat-card">{_sort_label(sort_order)}</span>
         </div>
       </div>
-      <a class="button secondary" href="/dashboard">Service Dashboard</a>
+      <a class="button secondary" href="/dashboard">진행 상태 보기</a>
     </header>
     <div class="toolbar">
       <form id="gallery-search-form" class="filters" method="get" action="/gallery">
         <label>
-          Search
-          <input type="search" name="q" value="{escape(q or '')}" placeholder="face, baby, receipt, 어르굴, filename">
+          검색
+          <input type="search" name="q" value="{escape(q or '')}" placeholder="예: 작년 바다, 아기, 영수증, 스위스">
         </label>
         <label>
-          Media Type
+          종류
           <select name="media_type">
             {_render_media_type_options(media_type)}
           </select>
         </label>
         <label>
-          Sort
+          정렬
           <select name="sort">
             {_render_sort_options(sort_order)}
           </select>
         </label>
         <label>
-          Date From
+          시작일
           <input type="date" name="date_from" value="{escape(date_from or '')}">
         </label>
         <label>
-          Date To
+          종료일
           <input type="date" name="date_to" value="{escape(date_to or '')}">
         </label>
         <label class="{'control-unavailable' if not person_available else ''}">
-          Person
-          <input type="text" name="person" value="{escape(person or '')}" list="person-options" placeholder="No person tags indexed yet"{" disabled" if not person_available else ""}>
-          <span class="control-note">{'AI 분석을 실행하면 인물 필터를 사용할 수 있습니다 → <a href="/dashboard">Dashboard</a>' if not person_available else '인물 태그로 필터링합니다.'}</span>
+          인물
+          <input type="text" name="person" value="{escape(person or '')}" list="person-options" placeholder="아직 인물 태그가 없습니다"{" disabled" if not person_available else ""}>
+          <span class="control-note">{'분석이 끝나면 인물별로 걸러볼 수 있습니다 → <a href="/dashboard">진행 상태 보기</a>' if not person_available else '인물 태그로 걸러봅니다.'}</span>
         </label>
         <label class="{'control-unavailable' if not place_available else ''}">
-          Place
-          <input type="text" name="place" value="{escape(place or '')}" list="place-options" placeholder="No place tags indexed yet"{" disabled" if not place_available else ""}>
-          <span class="control-note">{'AI 분석을 실행하면 장소 필터를 사용할 수 있습니다 → <a href="/dashboard">Dashboard</a>' if not place_available else '장소/위치 태그로 필터링합니다.'}</span>
+          장소
+          <input type="text" name="place" value="{escape(place or '')}" list="place-options" placeholder="아직 장소 태그가 없습니다"{" disabled" if not place_available else ""}>
+          <span class="control-note">{'분석이 끝나면 장소별로 걸러볼 수 있습니다 → <a href="/dashboard">진행 상태 보기</a>' if not place_available else '장소/위치 태그로 걸러봅니다.'}</span>
         </label>
         <div class="actions">
-          <button id="gallery-search-button" class="button" type="submit">Search</button>
-          <a class="button secondary" href="/gallery">Reset</a>
+          <button id="gallery-search-button" class="button" type="submit">검색</button>
+          <a class="button secondary" href="/gallery">초기화</a>
         </div>
         <datalist id="person-options">{_render_datalist_options(person_options)}</datalist>
         <datalist id="place-options">{_render_datalist_options(place_options)}</datalist>
       </form>
       <div class="quick-searches">
-        <span>Quick search</span>
+        <span>빠른 검색</span>
         {_render_quick_searches(request, q)}
       </div>
     </div>
@@ -808,21 +805,21 @@ async def gallery_page(
     </section>
     <div class="meta-bar">
       <div class="meta-pillset">
-        <span class="meta-pill">{total} items{_render_filter_hint(person, place)}</span>
+        <span class="meta-pill">{total}개 항목{_render_filter_hint(person, place)}</span>
         {_render_search_mode_pill(search_meta)}
-        <span class="meta-pill">Sort: {_sort_label(sort_order)}</span>
-        <span class="meta-pill">Page {page} of {page_count}</span>
+        <span class="meta-pill">정렬: {_sort_label(sort_order)}</span>
+        <span class="meta-pill">{page} / {page_count}페이지</span>
       </div>
-      <span>{'Showing ' + str(offset + 1) + '–' + str(offset + len(items)) if items else 'Showing 0 items'}</span>
+      <span>{str(offset + 1) + '–' + str(offset + len(items)) + '번째 표시 중' if items else '표시할 항목 없음'}</span>
     </div>
     <section id="gallery" class="gallery">
-      {''.join(cards) if cards else '<article class="card"><div class="body"><p class="summary">No media matched the current filters.</p></div></article>'}
+      {''.join(cards) if cards else _render_empty_state(q, person, place)}
     </section>
     <nav class="pagination">
       <span></span>
       <div class="actions">
-        {_render_page_link('Previous', _page_url(request, page - 1), enabled=has_prev)}
-        {_render_page_link('Next', _page_url(request, page + 1), enabled=has_next)}
+        {_render_page_link('이전', _page_url(request, page - 1), enabled=has_prev)}
+        {_render_page_link('다음', _page_url(request, page + 1), enabled=has_next)}
       </div>
     </nav>
   </main>
@@ -839,16 +836,16 @@ async def gallery_page(
       document.body.classList.add("is-searching");
       if (searchButton) {{
         searchButton.disabled = true;
-        searchButton.textContent = "Searching...";
+        searchButton.textContent = "검색 중...";
       }}
     }}
 
     if (searchForm) {{
-      searchForm.addEventListener("submit", () => showSearchProgress("Searching your library"));
+      searchForm.addEventListener("submit", () => showSearchProgress("사진을 찾는 중입니다"));
     }}
 
     document.querySelectorAll(".quick-chip, .pagination a").forEach((link) => {{
-      link.addEventListener("click", () => showSearchProgress("Loading results"));
+      link.addEventListener("click", () => showSearchProgress("결과를 불러오는 중입니다"));
     }});
 
     window.addEventListener("pageshow", () => {{
@@ -856,7 +853,7 @@ async def gallery_page(
       document.body.classList.remove("is-searching");
       if (searchButton) {{
         searchButton.disabled = false;
-        searchButton.textContent = "Search";
+        searchButton.textContent = "검색";
       }}
     }});
   </script>
@@ -981,7 +978,7 @@ def _render_card(
         f'sizes="(max-width: 420px) 100vw, (max-width: 720px) 50vw, (max-width: 1100px) 33vw, 24vw" '
         f'width="{media_file.width or 512}" height="{media_file.height or 640}">'
         if asset is not None
-        else f'<div class="placeholder">{escape(media_file.media_kind)}</div>'
+        else f'<div class="placeholder">{escape(_media_kind_label(media_file.media_kind))}</div>'
     )
     title = _display_title(media_file, annotation)
     description = _display_description(media_file, tags, annotation)
@@ -994,13 +991,13 @@ def _render_card(
     thumb_href = f"#{preview_id}" if asset is not None else "#gallery"
     lightbox_html = (
         f"""
-      <div id="{preview_id}" class="lightbox" aria-label="{escape(title)} preview">
-        <a class="lightbox-backdrop" href="#gallery" aria-label="Close preview"></a>
+      <div id="{preview_id}" class="lightbox" aria-label="{escape(title)} 미리보기">
+        <a class="lightbox-backdrop" href="#gallery" aria-label="미리보기 닫기"></a>
         <div class="lightbox-panel">
-          <img src="/gallery/assets/{asset.id}" alt="{escape(title)} enlarged preview">
+          <img src="/gallery/assets/{asset.id}" alt="{escape(title)} 크게 보기">
           <div class="lightbox-caption">
             <span>{escape(title)}</span>
-            <a class="lightbox-close" href="#gallery">Close</a>
+            <a class="lightbox-close" href="#gallery">닫기</a>
           </div>
         </div>
       </div>
@@ -1010,24 +1007,24 @@ def _render_card(
     )
     return f"""
       <article id="card-{escape(media_file.file_id)}" class="card">
-        <a class="thumb" href="{thumb_href}" aria-label="Open {escape(title)} preview">{image_html}</a>
+        <a class="thumb" href="{thumb_href}" aria-label="{escape(title)} 크게 보기">{image_html}</a>
         <div class="body">
           <div class="row">
             <h2 class="filename">{escape(title)}</h2>
-            <span class="kind">{escape(media_file.media_kind)}</span>
+            <span class="kind">{escape(_media_kind_label(media_file.media_kind))}</span>
           </div>
           <p class="detail">{escape(_display_date(media_file))}</p>
           <p class="summary">{escape(description)}</p>
           <p class="pathline">{escape(media_file.relative_path)}</p>
           {f'<p class="tags">{tag_html}</p>' if tag_html else ''}
           <details class="edit-panel">
-            <summary>Edit name, description, tags</summary>
+            <summary>이름, 설명, 태그 수정</summary>
             <form class="edit-form" method="post" action="/media/{escape(media_file.file_id)}/annotation">
-              <input name="title" value="{escape(annotation.title if annotation and annotation.title else '')}" placeholder="Display name">
-              <textarea name="description" placeholder="Description">{escape(annotation.description if annotation and annotation.description else '')}</textarea>
-              <input name="tags" value="{escape(custom_tags)}" placeholder="Tags, comma separated">
+              <input name="title" value="{escape(annotation.title if annotation and annotation.title else '')}" placeholder="표시할 이름">
+              <textarea name="description" placeholder="설명">{escape(annotation.description if annotation and annotation.description else '')}</textarea>
+              <input name="tags" value="{escape(custom_tags)}" placeholder="태그, 쉼표로 구분">
               <input type="hidden" name="next" value="{escape(next_url)}">
-              <button type="submit">Save</button>
+              <button type="submit">저장</button>
             </form>
           </details>
         </div>
@@ -1068,11 +1065,19 @@ def _display_date(media_file: MediaFile) -> str:
     for value in (media_file.exif_datetime, media_file.processed_at, media_file.last_seen_at):
         if value is not None:
             return value.strftime("%Y-%m-%d %H:%M")
-    return "date unknown"
+    return "날짜 없음"
+
+
+def _media_kind_label(value: str | None) -> str:
+    labels = {
+        "image": "사진",
+        "video": "영상",
+    }
+    return labels.get(value or "", value or "미디어")
 
 
 def _render_media_type_options(selected: str | None) -> str:
-    options = [("", "All"), ("image", "Image"), ("video", "Video")]
+    options = [("", "전체"), ("image", "사진"), ("video", "영상")]
     rendered: list[str] = []
     for value, label in options:
         is_selected = ' selected' if selected == value or (selected is None and value == "") else ""
@@ -1087,8 +1092,8 @@ def _normalize_sort(value: str | None) -> str:
 
 def _render_sort_options(selected: str) -> str:
     labels = {
-        SORT_NEWEST: "Newest first",
-        SORT_OLDEST: "Oldest first",
+        SORT_NEWEST: "최신순",
+        SORT_OLDEST: "오래된순",
     }
     return "".join(
         f'<option value="{escape(value)}"{" selected" if selected == value else ""}>{escape(label)}</option>'
@@ -1097,11 +1102,28 @@ def _render_sort_options(selected: str) -> str:
 
 
 def _sort_label(sort: str) -> str:
-    return "Oldest first" if sort == SORT_OLDEST else "Newest first"
+    return "오래된순" if sort == SORT_OLDEST else "최신순"
 
 
 def _render_datalist_options(values: list[str]) -> str:
     return "".join(f'<option value="{escape(value)}"></option>' for value in values)
+
+
+def _render_empty_state(q: str | None, person: str | None, place: str | None) -> str:
+    if q or person or place:
+        message = "조건에 맞는 사진이나 영상을 찾지 못했습니다."
+        hint = "검색어를 더 짧게 쓰거나 날짜, 인물, 장소 조건을 하나씩 줄여보세요."
+    else:
+        message = "아직 보여줄 사진이나 영상이 없습니다."
+        hint = "진행 상태 보기에서 사진 가져오기가 끝났는지 확인할 수 있습니다."
+    return f"""
+      <article class="card">
+        <div class="body">
+          <p class="summary">{escape(message)}</p>
+          <p class="detail">{escape(hint)}</p>
+        </div>
+      </article>
+    """
 
 
 def _render_quick_searches(request: Request, active_query: str | None) -> str:
@@ -1122,12 +1144,12 @@ def _quick_search_url(request: Request, term: str) -> str:
 def _render_filter_hint(person: str | None, place: str | None) -> str:
     hints: list[str] = []
     if person:
-        hints.append(f"person={escape(person)}")
+        hints.append(f"인물: {escape(person)}")
     if place:
-        hints.append(f"place={escape(place)}")
+        hints.append(f"장소: {escape(place)}")
     if not hints:
         return ""
-    return " filtered by " + ", ".join(hints)
+    return " · " + ", ".join(hints)
 
 
 def _render_active_filter_summary(
@@ -1143,24 +1165,24 @@ def _render_active_filter_summary(
 ) -> str:
     filters: list[tuple[str, str]] = []
     if q:
-        filters.append(("Search", q))
+        filters.append(("검색어", q))
         if search_meta:
             filters.append(("검색 방식", _friendly_intent_label(search_meta)))
     if media_type:
-        filters.append(("Media", media_type))
+        filters.append(("종류", _media_kind_label(media_type)))
     if date_from:
-        filters.append(("From", date_from))
+        filters.append(("시작일", date_from))
     if date_to:
-        filters.append(("To", date_to))
+        filters.append(("종료일", date_to))
     if person:
-        filters.append(("Person", person))
+        filters.append(("인물", person))
     if place:
-        filters.append(("Place", place))
+        filters.append(("장소", place))
     if sort == SORT_OLDEST:
-        filters.append(("Sort", _sort_label(sort)))
+        filters.append(("정렬", _sort_label(sort)))
 
     if not filters:
-        return '<span class="filter-chip"><strong>Active filters</strong> None</span>'
+        return '<span class="filter-chip"><strong>적용된 조건</strong> 없음</span>'
 
     return "".join(
         f'<span class="filter-chip"><strong>{escape(label)}</strong> {escape(value)}</span>'
