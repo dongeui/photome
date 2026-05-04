@@ -172,8 +172,8 @@ class SemanticCatalog:
                 .order_by(MediaEmbedding.model_name.asc(), MediaEmbedding.version.asc())
             )
         )
-        people = sorted({tag.tag_value for tag in tags if tag.tag_type in {"person", "people", "face"}})
-        places = sorted({tag.tag_value for tag in tags if tag.tag_type in {"place", "place_detail", "location"}})
+        people = sorted({tag.tag_value for tag in tags if tag.tag_type in {"person", "people", "face", "auto_person"}})
+        places = sorted({tag.tag_value for tag in tags if tag.tag_type in {"place", "place_detail", "location", "auto_scene"}})
         tag_payload = [{"type": tag.tag_type, "value": tag.tag_value} for tag in tags]
         embedding_payload = [
             {

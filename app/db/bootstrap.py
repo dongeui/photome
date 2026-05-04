@@ -46,10 +46,29 @@ def build_database_state(settings: AppSettings) -> DatabaseState:
     engine = create_engine_for_settings(settings)
     Base.metadata.create_all(engine)
     _ensure_search_document_fts(engine)
+    _ensure_tag_indexes(engine)
     _migrate_auto_tag_types(engine)
     session_factory = create_session_factory(engine)
     logger.info("database bootstrapped", extra={"database_url": settings.database_url})
     return DatabaseState(settings=settings, engine=engine, session_factory=session_factory)
+
+
+def _ensure_tag_indexes(engine: Engine) -> None:
+    """Idempotently create compound tag index for existing databases.
+
+    create_all() creates the index for new DBs, but skips it on existing ones.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_tags_type_value ON tags (tag_type, tag_value)"
+                )
+            )
+    except Exception as exc:
+        logger.warning("tag compound index creation failed", extra={"error": str(exc)})
 
 
 def _migrate_auto_tag_types(engine: Engine) -> None:
