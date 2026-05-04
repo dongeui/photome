@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from app.api.ai_pack import get_ai_pack_state
 from app.api.deps import require_state
 from app.api.serializers import serialize_scheduler_snapshot
 from app.core.settings import AppSettings
@@ -126,6 +127,31 @@ def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
     return deepcopy(payload)
 
 
+def _ai_step2_body(stage: str, error: str | None) -> str:
+    if stage == "ready":
+        return '<span class="status-ok">Downloaded</span>'
+    if stage == "needs_packages":
+        return '<span class="muted">Waiting for packages…</span>'
+    if stage == "downloading":
+        return '<span class="ai-spinner"></span><span id="ai-dl-label"> Downloading…</span>'
+    if stage == "error":
+        return f'<span class="status-warn">Error: {escape(error or "unknown")}</span><button class="btn-sm" onclick="aiPackPrepare()">Retry</button>'
+    # needs_download
+    return '<button class="btn-primary" id="ai-download-btn" onclick="aiPackPrepare()">Download model</button>'
+
+
+def _ai_step3_body(stage: str, clip_enabled: bool) -> str:
+    if stage != "ready":
+        return '<span class="muted">Waiting for model…</span>'
+    if clip_enabled:
+        return '<span class="status-ok">Active</span>'
+    return '''<p class="ai-step-desc">Set this environment variable and restart the server:</p>
+<div class="ai-cmd-row">
+  <code id="activate-cmd">PHOTOME_CLIP_ENABLED=1</code>
+  <button class="btn-copy" onclick="copyText('activate-cmd', this)">Copy</button>
+</div>'''
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request) -> HTMLResponse:
     payload = await status(request)
@@ -150,6 +176,10 @@ async def dashboard(request: Request) -> HTMLResponse:
     clip_cache = clip_dependency.get("cache") or {}
     clip_ready = clip_dependency.get("state") == "ready"
     clip_enabled = clip_dependency.get("state") != "disabled"
+    ai_pack = get_ai_pack_state()
+    ai_pack_stage = ai_pack["stage"]  # needs_packages | needs_download | downloading | ready | error
+    ai_pack_model_name = ai_pack["config"].get("model_name", settings.semantic_clip_model_name)
+    ai_pack_pretrained = ai_pack["config"].get("pretrained", settings.semantic_clip_pretrained)
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -420,6 +450,28 @@ async def dashboard(request: Request) -> HTMLResponse:
       white-space: pre-wrap;
     }}
     .scan-result.visible {{ display: block; }}
+    /* AI pack setup steps */
+    .ai-steps {{ display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }}
+    .ai-step {{ display: flex; gap: 14px; align-items: flex-start; padding: 14px 16px; border-radius: 10px; background: var(--bg); border: 1.5px solid var(--line); }}
+    .ai-step-done {{ opacity: 0.55; }}
+    .ai-step-active {{ border-color: var(--accent); background: var(--accent-soft); }}
+    .ai-step-locked {{ opacity: 0.35; pointer-events: none; }}
+    .ai-step-num {{ width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: .8rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }}
+    .ai-step-done .ai-step-num {{ background: var(--ok); }}
+    .ai-step-locked .ai-step-num {{ background: var(--muted); }}
+    .ai-step-body {{ flex: 1; display: flex; flex-direction: column; gap: 6px; }}
+    .ai-step-body strong {{ font-size: .95rem; }}
+    .ai-step-desc {{ margin: 0; font-size: .85rem; color: var(--muted); }}
+    .ai-cmd-row {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
+    .ai-cmd-row code {{ flex: 1; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: .85rem; }}
+    .btn-primary {{ padding: 7px 18px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: .875rem; font-weight: 600; cursor: pointer; }}
+    .btn-primary:hover {{ opacity: .88; }}
+    .btn-primary:disabled {{ opacity: .4; cursor: default; }}
+    .btn-sm {{ padding: 4px 12px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: .8rem; cursor: pointer; }}
+    .btn-copy {{ padding: 4px 10px; background: transparent; border: 1px solid var(--line); border-radius: 6px; font-size: .78rem; cursor: pointer; color: var(--muted); }}
+    .btn-copy:hover {{ border-color: var(--accent); color: var(--accent); }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    .ai-spinner {{ display: inline-block; width: 14px; height: 14px; border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-right: 4px; }}
     .debug-form {{
       display: grid;
       gap: 10px;
@@ -629,28 +681,46 @@ async def dashboard(request: Request) -> HTMLResponse:
         </div>
       </article>
 
-      <article class="card full">
+      <article class="card full" id="ai-pack-card">
         <h2>Local AI Image Search</h2>
-        <p class="sub">Optional AI pack for visual similarity search. The base app works without it — install <code>photome-local-ai-pack</code> to enable.</p>
-        <div class="pill-row">
-          <span class="pill"><strong>State</strong> <span class="{'status-ok' if clip_ready else 'status-warn'}">{escape(str(clip_dependency.get("state")))}</span></span>
-          <span class="pill"><strong>Mode</strong> {'enabled' if clip_enabled else 'base'}</span>
-          <span class="pill"><strong>Model</strong> {escape(settings.semantic_clip_model_name)} / {escape(settings.semantic_clip_pretrained)}</span>
-        </div>
-        <div class="mini-grid" style="margin-top:14px;">
-          <div class="list">
-            <div class="row"><span>open_clip_torch</span><span>{escape(str(clip_deps.get("open_clip_torch", "unknown")))}</span></div>
-            <div class="row"><span>torch</span><span>{escape(str(clip_deps.get("torch", "unknown")))}</span></div>
-            <div class="row"><span>torchvision</span><span>{escape(str(clip_deps.get("torchvision", "unknown")))}</span></div>
+        <p class="sub">Enable natural-language visual search — <em>바다에서 찍은 사진</em>, <em>baby beach</em>, <em>여자 셀카</em>. The base app runs fully without it.</p>
+        <div class="ai-steps" id="ai-pack-steps">
+
+          <!-- Step 1: packages -->
+          <div class="ai-step {'ai-step-done' if ai_pack['deps_ready'] else 'ai-step-active'}" id="ai-step-1">
+            <div class="ai-step-num">{'✓' if ai_pack['deps_ready'] else '1'}</div>
+            <div class="ai-step-body">
+              <strong>Install AI packages</strong>
+              {'<span class="status-ok">Installed</span>' if ai_pack['deps_ready'] else f'''
+              <p class="ai-step-desc">Run this once in your photome environment:</p>
+              <div class="ai-cmd-row">
+                <code id="pkg-cmd">pip install "photome[clip]"</code>
+                <button class="btn-copy" onclick="copyText('pkg-cmd', this)">Copy</button>
+              </div>
+              <p class="ai-step-desc muted">Installs PyTorch + open_clip_torch (~2 GB). Refresh when done.</p>
+              '''}
+            </div>
           </div>
-          <div class="list">
-            <div class="row"><span>HF_HOME</span><span><code>{escape(str(clip_cache.get("hf_home") or "not set"))}</code></span></div>
-            <div class="row"><span>TORCH_HOME</span><span><code>{escape(str(clip_cache.get("torch_home") or "not set"))}</code></span></div>
-            <div class="row"><span>Offline flags</span><span>{escape(str(clip_cache.get("hf_hub_offline") or "0"))} / {escape(str(clip_cache.get("transformers_offline") or "0"))}</span></div>
+
+          <!-- Step 2: download model -->
+          <div class="ai-step {'ai-step-done' if ai_pack_stage == 'ready' else ('ai-step-active' if ai_pack['deps_ready'] else 'ai-step-locked')}" id="ai-step-2">
+            <div class="ai-step-num">{'✓' if ai_pack_stage == 'ready' else '2'}</div>
+            <div class="ai-step-body">
+              <strong>Download model</strong>
+              <span class="muted" style="font-size:0.85em">{escape(ai_pack_model_name)} / {escape(ai_pack_pretrained)} · ~340 MB</span>
+              {_ai_step2_body(ai_pack_stage, ai_pack.get('model_error'))}
+            </div>
           </div>
-        </div>
-        <div class="list" style="margin-top:10px;">
-          <div class="row"><span>Verify command</span><span><code>photome-local-ai-pack status</code></span></div>
+
+          <!-- Step 3: activate -->
+          <div class="ai-step {'ai-step-active' if ai_pack_stage == 'ready' and not clip_enabled else ('ai-step-done' if ai_pack_stage == 'ready' and clip_enabled else 'ai-step-locked')}" id="ai-step-3">
+            <div class="ai-step-num">{'✓' if (ai_pack_stage == 'ready' and clip_enabled) else '3'}</div>
+            <div class="ai-step-body">
+              <strong>Activate</strong>
+              {_ai_step3_body(ai_pack_stage, clip_enabled)}
+            </div>
+          </div>
+
         </div>
       </article>
 
@@ -1186,6 +1256,92 @@ async def dashboard(request: Request) -> HTMLResponse:
         benchmarkResult.textContent = `error: ${{error.message}}`;
       }}
     }});
+
+    // ── AI pack install flow ──────────────────────────────────────────
+    function copyText(id, btn) {{
+      const text = document.getElementById(id)?.textContent || "";
+      navigator.clipboard.writeText(text).then(() => {{
+        btn.textContent = "Copied!";
+        setTimeout(() => btn.textContent = "Copy", 1500);
+      }});
+    }}
+
+    let _aiPollTimer = null;
+
+    function aiPackPrepare() {{
+      const btn = document.getElementById("ai-download-btn");
+      if (btn) {{ btn.disabled = true; btn.textContent = "Starting…"; }}
+      fetch("/ai-pack/prepare", {{ method: "POST" }})
+        .then(r => r.json())
+        .then(d => {{
+          if (d.ok) {{ startAiPoll(); }} else {{ alert(d.message); if (btn) btn.disabled = false; }}
+        }})
+        .catch(e => {{ alert("Error: " + e.message); if (btn) btn.disabled = false; }});
+    }}
+
+    function startAiPoll() {{
+      if (_aiPollTimer) return;
+      _aiPollTimer = setInterval(pollAiProgress, 2000);
+      pollAiProgress();
+    }}
+
+    function pollAiProgress() {{
+      fetch("/ai-pack/progress")
+        .then(r => r.json())
+        .then(data => {{
+          const stage = data.stage;
+          updateAiStepUI(stage, data);
+          if (stage === "ready" || stage === "error") {{
+            clearInterval(_aiPollTimer);
+            _aiPollTimer = null;
+          }}
+        }})
+        .catch(() => {{ /* ignore transient errors */ }});
+    }}
+
+    function updateAiStepUI(stage, data) {{
+      const step2 = document.getElementById("ai-step-2");
+      const step3 = document.getElementById("ai-step-3");
+      if (!step2) return;
+
+      // Update step-2 body
+      const body2 = step2.querySelector(".ai-step-body");
+      if (stage === "downloading") {{
+        step2.className = "ai-step ai-step-active";
+        body2.innerHTML = body2.innerHTML.replace(/<button[^>]*>.*?<\/button>/s, "");
+        if (!body2.querySelector(".ai-spinner")) {{
+          const lbl = document.getElementById("ai-dl-label");
+          if (!lbl) body2.insertAdjacentHTML("beforeend", '<span><span class="ai-spinner"></span> Downloading…</span>');
+        }}
+      }} else if (stage === "ready") {{
+        step2.className = "ai-step ai-step-done";
+        step2.querySelector(".ai-step-num").textContent = "✓";
+        body2.querySelectorAll("button,span.ai-spinner,#ai-dl-label").forEach(el => el.remove());
+        body2.insertAdjacentHTML("beforeend", '<span class="status-ok">Downloaded</span>');
+        // Activate step
+        if (step3) {{
+          step3.className = "ai-step ai-step-active";
+          step3.querySelector(".ai-step-num").textContent = "3";
+          const body3 = step3.querySelector(".ai-step-body");
+          body3.querySelector(".muted")?.remove();
+          if (!body3.querySelector(".ai-cmd-row")) {{
+            body3.insertAdjacentHTML("beforeend", `<p class="ai-step-desc">Set this environment variable and restart:</p>
+              <div class="ai-cmd-row">
+                <code id="activate-cmd">PHOTOME_CLIP_ENABLED=1</code>
+                <button class="btn-copy" onclick="copyText('activate-cmd', this)">Copy</button>
+              </div>`);
+          }}
+        }}
+      }} else if (stage === "error") {{
+        step2.className = "ai-step ai-step-active";
+        const errMsg = data.model_error || "unknown error";
+        body2.innerHTML = `<strong>Download model</strong><span class="status-warn">Error: ${{errMsg}}</span><button class="btn-sm" onclick="aiPackPrepare()">Retry</button>`;
+      }}
+    }}
+
+    // Auto-start polling if already downloading on load
+    {'startAiPoll();' if ai_pack_stage == 'downloading' else '// not downloading on load'}
+
   </script>
 </body>
 </html>"""
