@@ -302,6 +302,63 @@ async def gallery_page(
       backdrop-filter: blur(12px) saturate(130%);
       box-shadow: var(--shadow);
     }}
+    .search-progress {{
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      z-index: 120;
+      width: min(520px, calc(100vw - 28px));
+      transform: translateX(-50%);
+      padding: 12px;
+      border: 1px solid rgba(38, 115, 107, 0.24);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 18px 46px rgba(23, 32, 38, 0.16);
+      backdrop-filter: blur(18px) saturate(145%);
+    }}
+    .search-progress[hidden] {{
+      display: none;
+    }}
+    .search-progress-row {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 9px;
+      color: #24343c;
+      font-size: 0.88rem;
+      font-weight: 800;
+    }}
+    .search-progress-row span:last-child {{
+      color: var(--accent);
+      font-size: 0.74rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }}
+    .search-progress-track {{
+      position: relative;
+      height: 9px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(38, 115, 107, 0.12);
+    }}
+    .search-progress-fill {{
+      position: absolute;
+      inset: 0;
+      width: 45%;
+      border-radius: inherit;
+      background:
+        linear-gradient(90deg, rgba(38, 115, 107, 0), rgba(38, 115, 107, 0.95), rgba(72, 190, 170, 0.92), rgba(38, 115, 107, 0));
+      animation: search-progress-slide 980ms cubic-bezier(.45, 0, .2, 1) infinite;
+    }}
+    @keyframes search-progress-slide {{
+      0% {{ transform: translateX(-115%); }}
+      100% {{ transform: translateX(235%); }}
+    }}
+    body.is-searching .button[type="submit"] {{
+      opacity: 0.72;
+      pointer-events: none;
+    }}
     label {{
       display: grid;
       gap: 5px;
@@ -669,6 +726,15 @@ async def gallery_page(
   </style>
 </head>
 <body>
+  <div id="search-progress" class="search-progress" aria-live="polite" aria-atomic="true" hidden>
+    <div class="search-progress-row">
+      <span>Searching your library</span>
+      <span>live</span>
+    </div>
+    <div class="search-progress-track" aria-hidden="true">
+      <div class="search-progress-fill"></div>
+    </div>
+  </div>
   <main class="shell">
     <header class="topbar">
       <div class="brand">
@@ -683,7 +749,7 @@ async def gallery_page(
       <a class="button secondary" href="/dashboard">Service Dashboard</a>
     </header>
     <div class="toolbar">
-      <form class="filters" method="get" action="/gallery">
+      <form id="gallery-search-form" class="filters" method="get" action="/gallery">
         <label>
           Search
           <input type="search" name="q" value="{escape(q or '')}" placeholder="face, baby, receipt, 어르굴, filename">
@@ -713,7 +779,7 @@ async def gallery_page(
           <span class="control-note">{'AI 분석을 실행하면 장소 필터를 사용할 수 있습니다 → <a href="/dashboard">Dashboard</a>' if not place_available else '장소/위치 태그로 필터링합니다.'}</span>
         </label>
         <div class="actions">
-          <button class="button" type="submit">Search</button>
+          <button id="gallery-search-button" class="button" type="submit">Search</button>
           <a class="button secondary" href="/gallery">Reset</a>
         </div>
         <datalist id="person-options">{_render_datalist_options(person_options)}</datalist>
@@ -746,6 +812,40 @@ async def gallery_page(
       </div>
     </nav>
   </main>
+  <script>
+    const searchProgress = document.getElementById("search-progress");
+    const searchForm = document.getElementById("gallery-search-form");
+    const searchButton = document.getElementById("gallery-search-button");
+
+    function showSearchProgress(label) {{
+      if (!searchProgress) return;
+      const title = searchProgress.querySelector(".search-progress-row span:first-child");
+      if (title && label) title.textContent = label;
+      searchProgress.hidden = false;
+      document.body.classList.add("is-searching");
+      if (searchButton) {{
+        searchButton.disabled = true;
+        searchButton.textContent = "Searching...";
+      }}
+    }}
+
+    if (searchForm) {{
+      searchForm.addEventListener("submit", () => showSearchProgress("Searching your library"));
+    }}
+
+    document.querySelectorAll(".quick-chip, .pagination a").forEach((link) => {{
+      link.addEventListener("click", () => showSearchProgress("Loading results"));
+    }});
+
+    window.addEventListener("pageshow", () => {{
+      if (searchProgress) searchProgress.hidden = true;
+      document.body.classList.remove("is-searching");
+      if (searchButton) {{
+        searchButton.disabled = false;
+        searchButton.textContent = "Search";
+      }}
+    }});
+  </script>
 </body>
 </html>"""
     return HTMLResponse(html)
