@@ -31,53 +31,7 @@ from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
 from app.services.search.vector import build_vector_index, VectorIndexBackend
 from app.services.search.hybrid import FACE_HINTS, TEXT_HINTS
-
-# Korean ↔ English tag synonyms: searching either side will also match the other
-TAG_SYNONYMS: dict[str, set[str]] = {
-    "baby": {"아기", "애기", "infant", "newborn", "toddler"},
-    "아기": {"baby", "infant", "애기", "toddler"},
-    "person": {"사람", "얼굴", "인물", "portrait"},
-    "얼굴": {"face", "person", "portrait", "인물"},
-    "receipt": {"영수증", "document"},
-    "영수증": {"receipt", "document"},
-    "screenshot": {"스크린샷", "screen", "화면"},
-    "스크린샷": {"screenshot", "screen", "화면"},
-    "food": {"음식", "meal"},
-    "음식": {"food", "meal"},
-    "outdoor": {"야외", "자연", "nature"},
-    "야외": {"outdoor", "nature"},
-    "beach": {"바다", "바닷가", "해변", "해수욕장", "해안", "sea", "ocean", "coast", "seaside", "water"},
-    "sea": {"바다", "바닷가", "해변", "beach", "ocean", "coast", "water"},
-    "ocean": {"바다", "바닷가", "해변", "beach", "sea", "coast", "water"},
-    "coast": {"바다", "바닷가", "해안", "해변", "beach", "sea", "ocean"},
-    "water": {"물", "바다", "바닷물", "sea", "ocean", "river", "lake"},
-    "바다": {"beach", "sea", "ocean", "coast", "seaside", "water", "해변", "바닷가"},
-    "바닷가": {"beach", "sea", "ocean", "coast", "seaside", "바다", "해변"},
-    "해변": {"beach", "sea", "ocean", "coast", "바다", "바닷가"},
-    "해안": {"coast", "seaside", "sea", "ocean", "beach", "바다"},
-    "travel": {"여행", "trip", "vacation"},
-    "여행": {"travel", "trip", "vacation"},
-    "wedding": {"결혼식", "결혼"},
-    "결혼식": {"wedding", "결혼"},
-    "birthday": {"생일", "celebration"},
-    "생일": {"birthday", "celebration"},
-    "night": {"야경", "야간"},
-    "야경": {"night", "야간"},
-    "celebration": {"파티", "생일", "party", "birthday"},
-    "파티": {"party", "celebration", "birthday"},
-    "dog": {"강아지", "puppy", "멍멍이"},
-    "강아지": {"dog", "puppy"},
-    "cat": {"고양이", "kitten"},
-    "고양이": {"cat", "kitten"},
-    "mountain": {"산", "등산", "hiking"},
-    "산": {"mountain", "hiking", "등산"},
-    "cake": {"케이크", "birthday"},
-    "케이크": {"cake", "birthday"},
-    "sunset": {"일몰", "노을"},
-    "일몰": {"sunset", "노을"},
-    "vehicle": {"차", "자동차", "car"},
-    "car": {"차", "자동차", "vehicle"},
-}
+from app.services.search.synonyms import load_tag_synonyms
 
 
 class SqlAlchemyHybridSearchBackend:
@@ -406,10 +360,10 @@ class SqlAlchemyHybridSearchBackend:
             return []
 
         # Build the set of tag values to search: exact match + synonyms
-        search_values = {lowered} | TAG_SYNONYMS.get(lowered, set())
+        search_values = {lowered} | load_tag_synonyms().get(lowered, set())
         # Also check each token of a multi-word query
         for token in lowered.split():
-            search_values |= TAG_SYNONYMS.get(token, set())
+            search_values |= load_tag_synonyms().get(token, set())
 
         # Resolve named persons: if any token matches a Person.display_name,
         # add their person-XXXXXX tag so the face cluster is found
@@ -602,9 +556,9 @@ class SqlAlchemyHybridSearchBackend:
         if len(lowered) < 2:
             return []
         # Collect synonyms as candidate values to look for
-        candidates = {lowered} | TAG_SYNONYMS.get(lowered, set())
+        candidates = {lowered} | load_tag_synonyms().get(lowered, set())
         for token in lowered.split():
-            candidates |= TAG_SYNONYMS.get(token, set())
+            candidates |= load_tag_synonyms().get(token, set())
 
         # Find tags that exist in the DB matching any candidate or partial
         pattern = f"%{lowered}%"

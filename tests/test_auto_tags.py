@@ -26,10 +26,10 @@ def test_auto_tags_from_signals_are_conservative_and_deduped() -> None:
     )
 
     assert [(tag.tag_type, tag.tag_value) for tag in tags] == [
-        ("auto", "screenshot"),
-        ("auto", "document"),
-        ("auto", "text"),
-        ("auto", "receipt"),
+        ("auto_screen", "screenshot"),
+        ("auto_screen", "document"),
+        ("auto_screen", "text"),
+        ("auto_screen", "receipt"),
     ]
 
 
@@ -80,7 +80,7 @@ def test_auto_tag_state_records_version(tmp_path: Path) -> None:
         )
         state = SemanticCatalog(session).upsert_auto_tag_state(
             "sample-file-id",
-            tags=[MediaTagInput(tag_type="auto", tag_value="screenshot")],
+            tags=[MediaTagInput(tag_type="auto_screen", tag_value="screenshot")],
             version="auto-v2",
         )
         session.commit()
@@ -88,5 +88,5 @@ def test_auto_tag_state_records_version(tmp_path: Path) -> None:
         reloaded = session.get(MediaAutoTagState, "sample-file-id")
         assert reloaded is not None
         assert reloaded.version == "auto-v2"
-        assert reloaded.tags_json == [{"type": "auto", "value": "screenshot"}]
+        assert reloaded.tags_json == [{"type": "auto_screen", "value": "screenshot"}]
         assert state.file_id == "sample-file-id"

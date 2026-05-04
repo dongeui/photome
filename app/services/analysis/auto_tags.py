@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -11,6 +10,7 @@ import re
 import numpy as np
 
 from app.core.contracts import MediaTagInput
+from app.services.analysis.clip_lexicon import load_clip_concepts, load_concept_aliases
 from app.services.embedding import clip as clip_embedding
 
 # All tag_type values managed by this module.
@@ -55,67 +55,6 @@ _MONTH_SEASON: dict[int, str] = {
 }
 
 
-@dataclass(frozen=True)
-class ClipConcept:
-    tag: str
-    prompts: tuple[str, ...]
-    threshold: float
-    tag_type: str
-
-
-CLIP_CONCEPTS = (
-    # People → auto_person
-    ClipConcept("person", ("a photo of a person", "a portrait photo", "a human face"), 0.235, "auto_person"),
-    ClipConcept("baby", ("a photo of a baby", "an infant lying down", "a newborn baby"), 0.255, "auto_person"),
-    ClipConcept("woman", ("a photo of a woman", "a female portrait", "a girl smiling in a photo"), 0.250, "auto_person"),
-    ClipConcept("man", ("a photo of a man", "a male portrait", "a boy smiling in a photo"), 0.250, "auto_person"),
-    ClipConcept("child", ("a photo of a child", "a kid playing", "a young child in a photo"), 0.250, "auto_person"),
-    ClipConcept("group", ("a group photo of people", "friends posing for a photo", "people gathered together"), 0.248, "auto_person"),
-    # Documents / screens → auto_screen
-    ClipConcept("receipt", ("a photo of a receipt", "a purchase receipt with text", "a cash register receipt"), 0.252, "auto_screen"),
-    ClipConcept("screenshot", ("a smartphone screenshot", "a screenshot of an app", "a mobile app interface"), 0.248, "auto_screen"),
-    ClipConcept("document", ("a document with text", "a page full of text", "a printed document"), 0.252, "auto_screen"),
-    # Outdoors / nature → auto_scene
-    ClipConcept("outdoor", ("an outdoor photo", "a street or park scene", "outside in natural light"), 0.242, "auto_scene"),
-    ClipConcept("beach", ("a beach photo", "the sea and sand", "ocean waves on a beach"), 0.250, "auto_scene"),
-    ClipConcept("sea", ("a photo of the sea", "blue ocean water", "a coastal seaside view"), 0.248, "auto_scene"),
-    ClipConcept("water", ("a photo near water", "water surface outdoors", "a lake river or ocean"), 0.246, "auto_scene"),
-    ClipConcept("mountain", ("a mountain landscape", "a hiking trail on a mountain", "a mountain view"), 0.248, "auto_scene"),
-    ClipConcept("nature", ("a nature photo", "trees and greenery", "a forest or countryside scene"), 0.242, "auto_scene"),
-    ClipConcept("sky", ("a blue sky with clouds", "a sunset sky", "a dramatic sky landscape"), 0.240, "auto_scene"),
-    # Food & drink → auto_object
-    ClipConcept("food", ("a photo of food", "a meal on a table", "a dish at a restaurant"), 0.248, "auto_object"),
-    ClipConcept("cake", ("a birthday cake", "a decorated cake with candles", "a slice of cake"), 0.255, "auto_object"),
-    ClipConcept("coffee", ("a cup of coffee", "a latte or espresso at a cafe", "a coffee drink"), 0.252, "auto_object"),
-    # Life events → auto_event
-    ClipConcept("celebration", ("a party or celebration", "people celebrating with drinks", "birthday party balloons"), 0.250, "auto_event"),
-    ClipConcept("wedding", ("a wedding ceremony", "bride and groom together", "wedding flowers and dress"), 0.258, "auto_event"),
-    # Travel / lighting → auto_scene
-    ClipConcept("travel", ("a travel photo", "a tourist at a famous landmark", "sightseeing abroad"), 0.245, "auto_scene"),
-    ClipConcept("night", ("a night photo", "a dark evening scene", "city lights at night"), 0.242, "auto_scene"),
-    ClipConcept("sunset", ("a sunset photo", "golden hour sky", "sun setting over the horizon"), 0.248, "auto_scene"),
-    # Vehicles → auto_object
-    ClipConcept("vehicle", ("a car or vehicle", "a photo of transportation", "a car on the road"), 0.232, "auto_object"),
-    # Animals → auto_object
-    ClipConcept("animal", ("a pet or animal", "a dog or cat", "an animal close-up portrait"), 0.240, "auto_object"),
-)
-
-CONCEPT_ALIASES: dict[str, tuple[str, ...]] = {
-    "beach": ("beach", "sea", "ocean", "coast", "water", "해변", "바다"),
-    "sea": ("sea", "ocean", "water", "coast", "바다"),
-    "water": ("water", "sea", "ocean", "river", "lake", "물"),
-    "baby": ("baby", "infant", "newborn", "toddler", "아기"),
-    "woman": ("woman", "female", "girl", "여자"),
-    "man": ("man", "male", "boy", "남자"),
-    "child": ("child", "kid", "어린이", "아이"),
-    "mountain": ("mountain", "hiking", "산", "등산"),
-    "nature": ("nature", "outdoor", "자연", "야외"),
-    "food": ("food", "meal", "음식"),
-    "receipt": ("receipt", "영수증"),
-    "screenshot": ("screenshot", "screen", "화면", "스크린샷"),
-}
-
-
 def tags_from_signals(analysis: dict, ocr_text: str = "") -> list[MediaTagInput]:
     tags: list[MediaTagInput] = []
     text = ocr_text.strip()
@@ -142,7 +81,8 @@ def tags_from_embedding_vector(vector: np.ndarray) -> list[MediaTagInput]:
         return []
     normalized = _normalize(vector.astype("float32"))
     hits: list[tuple[float, str, str]] = []
-    for concept in CLIP_CONCEPTS:
+    aliases_map = load_concept_aliases()
+    for concept in load_clip_concepts():
         score = float(normalized.dot(_concept_vector(concept.tag)))
         if score >= concept.threshold:
             hits.append((score, concept.tag, concept.tag_type))
@@ -151,7 +91,7 @@ def tags_from_embedding_vector(vector: np.ndarray) -> list[MediaTagInput]:
     seen: set[tuple[str, str]] = set()
     expanded: list[MediaTagInput] = []
     for _, tag, tag_type in hits[:5]:
-        for alias in CONCEPT_ALIASES.get(tag, (tag,)):
+        for alias in aliases_map.get(tag, (tag,)):
             key = (tag_type, alias)
             if key not in seen:
                 seen.add(key)
@@ -178,7 +118,7 @@ def merge_auto_tags(*tag_groups: list[MediaTagInput]) -> list[MediaTagInput]:
 def _concept_vectors() -> dict[str, np.ndarray]:
     clip_embedding.ensure_models()
     vectors: dict[str, np.ndarray] = {}
-    for concept in CLIP_CONCEPTS:
+    for concept in load_clip_concepts():
         prompt_vectors = [
             clip_embedding.embedding_from_bytes(clip_embedding.encode_text(prompt))
             for prompt in concept.prompts
