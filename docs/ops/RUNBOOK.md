@@ -59,3 +59,10 @@
   - `HF_HUB_OFFLINE=1`
   - `TRANSFORMERS_OFFLINE=1`
 - if the model/provider changes, bump embedding version and rebuild embeddings
+
+## CLIP embedding source policy (A — default)
+
+- **Primary input:** encode from `MediaFile.current_path` (NAS or source_roots; read-only observation). No requirement to copy full-resolution originals to the derived SSD for CLIP.
+- **Fallback:** if the primary path cannot be read or decode fails, use the Phase 1 thumbnail under `derived_root` (`thumb/v1/...`) when that file exists.
+- **When it runs:** With `PHOTOME_CLIP_ENABLED=1`, CLIP embedding and CLIP-derived auto-tags run during **Phase 1** image processing (`_refresh_media_assets` → `_materialize_image_semantics`) alongside thumbnail generation. **Phase 2** (scheduled semantic maintenance / backfill) catches up missing embeddings, stale search documents, or version skew — not a second pass for “better” vectors on unchanged pixels.
+- **Phase 1 / Phase 2 jobs:** Only one library job writes the catalog at a time; that serialization is unrelated to CLIP source choice. Policy A does not require the thumbnail to exist before CLIP runs, but the fallback works best if Phase 1 has already written the thumb when the source path fails.

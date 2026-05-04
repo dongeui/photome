@@ -64,10 +64,16 @@ Stage 2 — semantic enrichment and NL search:
 - `search.vector`: `VectorIndexBackend` 인터페이스와 `LocalNumpyVectorIndex` 기본 구현
 - `search`: FTS5 keyword search + OCR/tag/shadow document + CLIP vector 후보를 RRF로 결합
 
+## CLIP embedding input and phase split
+
+- **Policy A (default):** CLIP encodes from `current_path` first (NAS/source read). Thumbnail on derived storage is used only as a decode fallback. Originals are not copied wholesale to derived disk for embedding.
+- **Phase 1 (scan / per-media refresh):** For each image, after thumbnail generation, `ProcessingPipeline._materialize_image_semantics` runs when configured: OCR (prefers existing thumbnail via `_analysis_source_path` when present), optional CLIP embedding + CLIP auto-tags, and `search_documents` update. So the first full scan can already produce vectors and semantic rows while CLIP is enabled.
+- **Phase 2 (semantic maintenance):** Scheduled or manual `run_semantic_maintenance` / backfill fills gaps: missing embeddings, outdated `search_documents`, version mismatches. Re-encoding the same pixels under the same model/version is maintenance, not an accuracy multiplier.
+
 ## Phase 2 Cycle Contract
 
-- Phase 2는 Phase 1과 독립된 사이클로 돈다.
-- Phase 1이 새 파일을 안정화하고 `thumb_done` 또는 `analysis_done`으로 만들면 Phase 2 대상이 된다.
+- Phase 2는 Phase 1과 독립된 사이클로 돈다 (라이브러리 잡은 동시에 하나만 실행되어 DB 단일 writer를 보호).
+- Phase 1이 새 파일을 안정화하고 `thumb_done` 또는 `analysis_done`으로 만들면, 그 시점에서 이미 시맨틱 산출물이 있을 수 있다(CLIP/OCR 활성 시). Phase 2는 여전히 누락·스테일·버전 불일치를 배치로 보완한다.
 - Phase 2는 매 사이클마다 아래 항목만 처리한다.
   - `search_documents`가 없는 media
   - `SearchDocument.version`이 현재 `semantic_search_version`과 다른 media

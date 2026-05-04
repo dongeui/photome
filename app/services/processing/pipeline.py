@@ -896,6 +896,11 @@ class ProcessingPipeline:
             session.commit()
 
     def _refresh_media_assets(self, session: Session, media_file: MediaFile) -> dict[str, Any]:
+        """Phase 1 asset pass: thumb, faces, OCR/CLIP semantics when enabled, search_document.
+
+        CLIP embedding uses policy A: encode from ``current_path`` first, thumbnail fallback
+        (see ``_materialize_clip_embedding``). Documented in docs/ops/RUNBOOK.md.
+        """
         catalog = MediaCatalog(session)
         result: dict[str, Any] = {"file_id": media_file.file_id, "assets": []}
         preserved_tags, existing_place_tags, existing_person_tags = self._split_existing_tags(media_file.tags)
@@ -1140,12 +1145,17 @@ class ProcessingPipeline:
         return merged
 
     def _analysis_source_path(self, media_file: MediaFile) -> Path:
+        """OCR / signal analysis: prefer existing thumbnail (smaller I/O), else source path."""
         thumbnail_path = self._derived_root / self._clip_source_thumbnail_relative_path(media_file.file_id)
         if thumbnail_path.is_file():
             return thumbnail_path
         return Path(media_file.current_path)
 
     def _materialize_clip_embedding(self, media_file: MediaFile) -> dict[str, Any] | None:
+        """CLIP policy A: ``current_path`` (NAS/source) first; derived thumbnail only on failure.
+
+        Does not require copying full originals to derived disk. See RUNBOOK «CLIP embedding source policy».
+        """
         try:
             clip_embedding.ensure_models()
             payload = clip_embedding.encode_image(media_file.current_path)
