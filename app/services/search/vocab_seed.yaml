@@ -1,11 +1,18 @@
 # Search vocabulary seed — edit freely without code changes.
 # Loaded once at startup. Restart the server to pick up changes.
 #
-# person_terms:   triggers person/face routing in the query planner
-# place_terms:    triggers place routing and place_terms extraction
-# visual_terms:   triggers visual/CLIP routing
-# ocr_terms:      triggers OCR-first routing
-# place_aliases:  variant → canonical place name (e.g. 제주도 → 제주)
+# person_terms:      triggers person/face routing in the query planner
+# place_terms:       triggers place routing and place_terms extraction
+# visual_terms:      triggers visual/CLIP routing
+# ocr_terms:         triggers OCR-first routing
+# place_aliases:     variant → canonical place name (e.g. 제주도 → 제주)
+#
+# Hint sets — used by resolve_effective_mode to select the right search channel:
+# face_hints:        queries about people/faces → semantic mode
+# text_hints:        queries about text/documents → OCR mode
+# screen_hints:      queries about screenshots/UI → OCR mode
+# travel_hints:      queries about travel/outdoor scenes → semantic mode
+# celebration_hints: queries about parties/ceremonies → semantic mode
 
 person_terms:
   - face
@@ -458,3 +465,106 @@ clip_templates:
   고양이: cute cat kitten pet
   꽃: flowers garden bloom colorful
   하늘: blue sky clouds outdoor
+
+face_hints:
+  - face
+  - faces
+  - person
+  - people
+  - portrait
+  - selfie
+  - woman
+  - women
+  - female
+  - girl
+  - baby
+  - infant
+  - toddler
+  - child
+  - kid
+  - 얼굴
+  - 사람
+  - 인물
+  - 셀카
+  - 남자
+  - 남성
+  - 여자
+  - 여성
+  - 아기
+  - 애기
+  - 아이
+  - 어린이
+  - 엄마
+  - 아빠
+  - 할머니
+  - 할아버지
+  - 가족
+  - 친구
+  - 커플
+
+text_hints:
+  - text
+  - ocr
+  - document
+  - receipt
+  - error
+  - dialog
+  - message
+  - screen
+  - 텍스트
+  - 글씨
+  - 문서
+  - 영수증
+  - 오류
+  - 대화
+  - 메시지
+  - 화면
+
+screen_hints:
+  - screenshot
+  - screen
+  - ui
+  - chat
+  - popup
+  - 스크린샷
+  - 화면
+  - 앱
+  - 대화창
+  - 팝업
+
+travel_hints:
+  - travel
+  - trip
+  - vacation
+  - abroad
+  - tour
+  - beach
+  - sea
+  - ocean
+  - coast
+  - seaside
+  - 여행
+  - 휴가
+  - 해외
+  - 관광
+  - 제주
+  - 해변
+  - 바다
+  - 바닷가
+  - 해안
+  - 해수욕장
+
+celebration_hints:
+  - birthday
+  - party
+  - wedding
+  - graduation
+  - celebration
+  - 생일
+  - 파티
+  - 결혼식
+  - 졸업
+  - 졸업식
+  - 축하
+  - 크리스마스
+  - 새해

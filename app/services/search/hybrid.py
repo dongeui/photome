@@ -17,6 +17,7 @@ from datetime import datetime, time, timedelta
 from typing import Protocol
 
 from app.services.search.planner import QueryPlan, plan_query
+from app.services.search.seed import seed_list
 
 logger = logging.getLogger(__name__)
 
@@ -96,25 +97,11 @@ def clear_query_cache() -> int:
         _query_cache.clear()
     return count
 
-FACE_HINTS = {
-    "face", "faces", "person", "people", "portrait", "selfie",
-    "woman", "women", "female", "girl", "baby", "infant", "toddler", "child", "kid",
-    "얼굴", "사람", "인물", "셀카", "남자", "남성", "여자", "여성", "아기", "애기", "아이", "어린이",
-    "엄마", "아빠", "할머니", "할아버지", "가족", "친구", "커플",
-}
-TEXT_HINTS = {
-    "text", "ocr", "document", "receipt", "error", "dialog", "message", "screen",
-    "텍스트", "글씨", "문서", "영수증", "오류", "대화", "메시지", "화면",
-}
-SCREEN_HINTS = {"screenshot", "screen", "ui", "chat", "popup", "스크린샷", "화면", "앱", "대화창", "팝업"}
-TRAVEL_HINTS = {
-    "travel", "trip", "vacation", "abroad", "tour", "beach", "sea", "ocean", "coast", "seaside",
-    "여행", "휴가", "해외", "관광", "제주", "해변", "바다", "바닷가", "해안", "해수욕장",
-}
-CELEBRATION_HINTS = {
-    "birthday", "party", "wedding", "graduation", "celebration",
-    "생일", "파티", "결혼식", "졸업", "졸업식", "축하", "크리스마스", "새해",
-}
+FACE_HINTS: frozenset[str] = frozenset(seed_list("face_hints"))
+TEXT_HINTS: frozenset[str] = frozenset(seed_list("text_hints"))
+SCREEN_HINTS: frozenset[str] = frozenset(seed_list("screen_hints"))
+TRAVEL_HINTS: frozenset[str] = frozenset(seed_list("travel_hints"))
+CELEBRATION_HINTS: frozenset[str] = frozenset(seed_list("celebration_hints"))
 
 
 class HybridSearchBackend(Protocol):
