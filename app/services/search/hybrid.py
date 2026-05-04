@@ -1022,10 +1022,9 @@ def remove_near_duplicates(
     Within each burst, only the top-scored result is kept.  Results without a
     timestamp are always kept (conservative approach).
     """
-    from datetime import timezone
-
     kept: list[dict] = []
-    seen_windows: dict[str, float] = {}  # bucket_key → best rank_score seen
+    # bucket_key → (best_score, index_in_kept) — O(1) replacement via stored index
+    seen_windows: dict[str, tuple[float, int]] = {}
 
     for result in results:
         captured = result.get("captured_at")
@@ -1048,25 +1047,12 @@ def remove_near_duplicates(
         key = str(bucket)
 
         if key not in seen_windows:
-            seen_windows[key] = score
+            seen_windows[key] = (score, len(kept))
             kept.append(result)
-        elif score > seen_windows[key]:
-            # Replace the lower-scored burst member
-            seen_windows[key] = score
-            for i, existing in enumerate(kept):
-                ex_captured = existing.get("captured_at")
-                if ex_captured is None:
-                    continue
-                try:
-                    if isinstance(ex_captured, str):
-                        from datetime import datetime as _dt
-                        ex_captured = _dt.fromisoformat(ex_captured)
-                    ex_ts = int(ex_captured.timestamp())
-                except Exception:
-                    continue
-                if ex_ts // burst_seconds == bucket:
-                    kept[i] = result
-                    break
+        elif score > seen_windows[key][0]:
+            _, idx = seen_windows[key]
+            seen_windows[key] = (score, idx)
+            kept[idx] = result
         # else: a better result for this burst is already kept — skip
 
     return kept
