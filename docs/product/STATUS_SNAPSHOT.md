@@ -1,5 +1,5 @@
 # Status Snapshot
-updated 2026-05-04 (검색 강화 Round 1~3 + B안 태그 서브타입 + AI pack UI 완료)
+updated 2026-05-04 (Phase 1 media facts + 자연어 검색 강화 + AI pack UI)
 
 이 문서는 아래 4가지만 남긴다.
 
@@ -14,13 +14,15 @@ updated 2026-05-04 (검색 강화 Round 1~3 + B안 태그 서브타입 + AI pack
 
 - `T1~T15` 스테이지-1 캐싱 파이프라인은 로컬에서 동작 확인을 마쳤다. `FastAPI`, `DB`, `scanner`, `fingerprint`, `metadata`, `thumbnail`, `video keyframe`, `incremental scan`, `job pipeline`, `scheduler`, `API`, `status`가 연결돼 있다.
 - 실제 NAS 샘플 100개 스모크에서 `created=100`, `processed=100`, `errors=0`을 확인했다. 결과는 이미지 `thumb_done` 45개, 비디오 `analysis_done` 55개였다.
+- Phase 1은 원본/파일시스템 기반 media facts의 owner다. `size_bytes`, `mtime_ns`, MIME, width/height, duration, codec, `exif_datetime`, raw `metadata_json`, EXIF GPS, coordinate/place tags를 스캔·per-media refresh 시점에 확정한다.
 - 사람/장소 태그는 썸네일이 아니라 `원본 이미지 + EXIF GPS`, 비디오는 `keyframe` 기준으로 생성한다.
 - 얼굴 검출·임베딩은 OpenCV YuNet + SFace를 사용하고, centroid 기반 사람 클러스터링으로 같은 얼굴은 다른 `file_id`에서도 같은 `person-XXXXXX` 태그를 재사용한다.
-- EXIF GPS 기반 `place`(coarse)와 `place_detail`(exact) 태그 생성이 구현돼 있다.
-- 스테이지-2 구현은 `T16~T23`까지 코드가 들어가 있다. 범위는 reverse geocoding, embedding/search, OCR, caption, NL query parser, `/search` 하이브리드 검색이다.
-- `Phase 1 polling`과 `Phase 2 semantic scheduling`은 설정과 `/status` 응답에 반영돼 있다. semantic 버전 세트는 `place/person/ocr/caption/embedding/auto_tags/search` 기준으로 노출된다.
+- EXIF GPS 기반 `place`(coarse), `place_detail`(exact), reverse-geocoded city/region/country 태그 생성이 Phase 1에 연결돼 있다. standard mode 기본값은 enabled, `PHOTOME_OFFLINE_MODE=1`에서는 비활성화된다.
+- 스테이지-2 구현은 `T16~T23`까지 코드가 들어가 있다. 범위는 embedding/search, OCR, caption, NL query parser, `/search` 하이브리드 검색이다. reverse geocoding은 GPS 기반 Phase 1 place fact로 이동했다.
+- `Phase 1 polling`과 `Phase 2 semantic scheduling`은 설정과 `/status` 응답에 반영돼 있다. semantic 버전 세트는 `place/person/ocr/caption/embedding/auto_tags/search` 기준으로 노출된다. 현재 기본값은 `place-v2`, `embedding-v1`, `auto-v3`, `search-v3`다.
 - Phase 1 dashboard에서 런타임 source root를 입력해 `POST /scan?source_roots=...`로 스캔할 수 있다. 경로 미입력 시 환경변수 source root를 그대로 사용한다.
 - Phase 2는 독립 semantic maintenance cycle로 돈다. `run_semantic_maintenance()`는 `search_documents`가 없거나 stale이거나 version mismatch인 media만 처리하며, non-blocking lock으로 중복 실행을 막는다.
+- Phase 2 maintenance는 기존 라이브러리의 place/search version catch-up도 수행하지만, file size/dimensions/capture time/GPS 원천 추출의 owner는 아니다.
 - `search_documents`는 Phase 2 canonical search document다. 파일명, 상대 경로, annotation, OCR, tag, person, place, analysis signal, embedding ref를 집계한다.
 - SQLite FTS5 virtual table이 keyword search acceleration layer로 붙었다. unicode61 테이블(`search_documents_fts`)과 trigram 테이블(`search_documents_fts_ko`)을 이중 운영한다. FTS 실패 시 기존 LIKE fallback을 유지한다.
 - 수동 Phase 2 검증 endpoint는 `POST /scan/semantic-maintenance`다.
@@ -70,7 +72,7 @@ updated 2026-05-04 (검색 강화 Round 1~3 + B안 태그 서브타입 + AI pack
 - **`AUTO_TAG_TYPES` 상수**: `app/services/analysis/auto_tags.py`에서 export. pipeline에서 "auto" 문자열 하드코딩 제거.
 - **TagVocabularyCache 분류 확장**: `auto_scene` → `_PLACE_TAG_TYPES`, `auto_person` → `_PERSON_TAG_TYPES`. QueryPlanner가 CLIP 기반 장소/인물 태그를 인식.
 - **`search_documents` people/places 필드**: `auto_person` → `people_json`, `auto_scene` → `places_json` 포함.
-- **`semantic_auto_tag_version`**: 기본값 `auto-v1` → `auto-v2`. 다음 semantic maintenance 사이클에서 전체 재처리 트리거.
+- **`semantic_auto_tag_version`**: B안 도입 당시 기본값 `auto-v1` → `auto-v2`. 현재 기본값은 검색 어휘/CLIP concept 확장 반영으로 `auto-v3`.
 - **`_migrate_auto_tag_types()`**: 서버 시작 시 자동 실행. 기존 `tag_type="auto"` 행을 서브타입으로 변환.
 - **`ix_tags_type_value` 복합 인덱스**: `tags(tag_type, tag_value)`. 기존 DB는 `_ensure_tag_indexes()`로 시작 시 자동 적용.
 
@@ -84,8 +86,9 @@ updated 2026-05-04 (검색 강화 Round 1~3 + B안 태그 서브타입 + AI pack
 ## 현재 작업
 
 - active branch는 `main`이다.
-- 로컬 서버는 `http://127.0.0.1:8000/gallery`와 `http://127.0.0.1:8000/dashboard`에서 확인 가능하다.
-- 서버 실행 설정은 Phase 1 polling off, Phase 2 semantic scheduler on, CLIP off, face analysis off다.
+- 로컬 서버는 현재 개발 세션에서 `http://127.0.0.1:8002/gallery`와 `http://127.0.0.1:8002/dashboard`로 재기동돼 있다.
+- 서버 실행 설정은 Phase 2 semantic scheduler on, CLIP enabled, face analysis enabled, geocoding enabled in standard mode다.
+- `search-v3` semantic maintenance가 기존 라이브러리의 place tag/search document catch-up을 수행 중이다.
 - 배포/모델팩 분리 정책은 `docs/ops/PACKAGING_STRATEGY.md`에 정리됐다.
 
 ## 남은 작업
@@ -94,7 +97,6 @@ updated 2026-05-04 (검색 강화 Round 1~3 + B안 태그 서브타입 + AI pack
 - vector adapter 후보 성능 검토: FAISS/LanceDB/Qdrant 중 첫 외부 adapter 결정
 - CLIP provider 설정을 model name/pretrained/cache root/env 기반으로 분리
 - people/person group API 구현
-- reverse geocoding provider/cache 구현
 - VLM caption adapter 구현
 - `T24` NL 회귀 시나리오 자동화 마감
 - `SCENARIO_VALIDATION_MATRIX`와 최종 QA 결과 동기화

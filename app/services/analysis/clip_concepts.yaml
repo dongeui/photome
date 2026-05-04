@@ -75,6 +75,13 @@ concepts:
       - outside in natural light
     threshold: 0.242
     tag_type: auto_scene
+  - tag: indoor
+    prompts:
+      - an indoor room scene
+      - inside a house or building
+      - an interior photo indoors
+    threshold: 0.242
+    tag_type: auto_scene
   - tag: beach
     prompts:
       - a beach photo
@@ -116,6 +123,20 @@ concepts:
       - a sunset sky
       - a dramatic sky landscape
     threshold: 0.24
+    tag_type: auto_scene
+  - tag: rain
+    prompts:
+      - a rainy day outdoors
+      - rain falling in the street
+      - a wet rainy scene
+    threshold: 0.244
+    tag_type: auto_scene
+  - tag: snow
+    prompts:
+      - a snowy winter scene
+      - snow on the ground outdoors
+      - falling snow in winter
+    threshold: 0.244
     tag_type: auto_scene
   - tag: food
     prompts:
@@ -187,8 +208,56 @@ concepts:
       - an animal close-up portrait
     threshold: 0.24
     tag_type: auto_object
+  - tag: flower
+    prompts:
+      - flowers blooming outdoors
+      - a flower close-up
+      - colorful flower petals
+    threshold: 0.242
+    tag_type: auto_object
+  - tag: bicycle
+    prompts:
+      - a bicycle or bike
+      - a person riding a bicycle
+      - a bicycle parked outside
+    threshold: 0.24
+    tag_type: auto_object
+  - tag: book
+    prompts:
+      - a book on a table
+      - a person reading a book
+      - an open book indoors
+    threshold: 0.242
+    tag_type: auto_object
+  - tag: classroom
+    prompts:
+      - a classroom with desks
+      - a school classroom indoors
+      - students in a classroom
+    threshold: 0.244
+    tag_type: auto_scene
+  - tag: concert
+    prompts:
+      - a live concert performance
+      - a stage performance with lights
+      - a music concert stage
+    threshold: 0.245
+    tag_type: auto_event
 
 concept_aliases:
+  indoor:
+    - indoor
+    - interior
+    - inside
+    - 실내
+  rain:
+    - rain
+    - rainy
+    - 비
+  snow:
+    - snow
+    - snowy
+    - 눈
   beach:
     - beach
     - sea
@@ -236,6 +305,32 @@ concept_aliases:
     - hiking
     - 산
     - 등산
+  flower:
+    - flower
+    - flowers
+    - blossom
+    - 꽃
+    - 벚꽃
+  bicycle:
+    - bicycle
+    - bike
+    - cycling
+    - 자전거
+  book:
+    - book
+    - reading
+    - 책
+    - 독서
+  classroom:
+    - classroom
+    - school
+    - class
+    - 교실
+  concert:
+    - concert
+    - live
+    - stage
+    - 공연
   nature:
     - nature
     - outdoor

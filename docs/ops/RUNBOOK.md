@@ -32,6 +32,26 @@
 - keep existing metadata readable
 - record scan failure and retry on next polling cycle
 
+## Phase 1 Media Fact Extraction
+
+Phase 1 owns facts that come from filesystem observation or the media file
+itself. During scan/per-media refresh, verify these are populated before treating
+Phase 2 search behavior as broken:
+
+- filesystem: `size_bytes`, `mtime_ns`, source root, relative path, current path
+- identity: `file_id`, partial hash, media kind
+- image/video metadata: MIME type, width, height, duration, codec
+- EXIF/container time: `exif_datetime`
+- location: raw GPS payload in `metadata_json`, coordinate tags, and reverse-geocoded place tags when enabled
+
+Phase 2 can rebuild `search_documents` from these facts, but should not be the
+first place where file size, dimensions, capture time, or GPS are extracted.
+
+Operator-facing status should stay at the Phase 1 / Phase 2 level. Internal job
+kinds such as semantic maintenance or backfill are implementation details; the
+dashboard should show whether Phase 1 or Phase 2 is running and what work is
+currently progressing.
+
 ## If Local AI Pack Is Missing
 
 - keep the base app running
@@ -60,10 +80,23 @@
   - `TRANSFORMERS_OFFLINE=1`
 - if the model/provider changes, bump embedding version and rebuild embeddings
 
+## Reverse Geocoding And Place Tags
+
+- default standard mode: enabled unless `PHOTOME_GEOCODING_ENABLED=0`
+- offline mode: disabled even if the default would otherwise enable it
+- custom provider endpoint: `PHOTOME_NOMINATIM_URL=<self-hosted-nominatim-url>`
+- cache key precision follows `PHOTOME_PLACE_TAG_PRECISION` (default `3`)
+- Phase 1 creates:
+  - `place=<rounded-lat>,<rounded-lon>`
+  - `place_detail=<lat>,<lon>`
+  - `place=<city/region/country>` from cached/provider reverse geocoding
+- Existing libraries are caught up by semantic maintenance after a place/search version bump; this is a migration path, not the steady-state owner of GPS extraction.
+
 ## CLIP embedding source policy (A — default)
 
 - **Primary input:** encode from `MediaFile.current_path` (NAS or source_roots; read-only observation). No requirement to copy full-resolution originals to the derived SSD for CLIP.
 - **Fallback:** if the primary path cannot be read or decode fails, use the Phase 1 thumbnail under `derived_root` (`thumb/v1/...`) when that file exists.
+- **Video input:** video files are not passed directly to CLIP. Phase 1/Phase 2 first materializes a video thumbnail with `ffmpeg`, then encodes that thumbnail image.
 - **When it runs:** With `PHOTOME_CLIP_ENABLED=1`, CLIP embedding and CLIP-derived auto-tags run during **Phase 1** image processing (`_refresh_media_assets` → `_materialize_image_semantics`) alongside thumbnail generation. **Phase 2** (scheduled semantic maintenance / backfill) catches up missing embeddings, stale search documents, or version skew — not a second pass for “better” vectors on unchanged pixels.
 - **Phase 1 / Phase 2 jobs:** Only one library job writes the catalog at a time; that serialization is unrelated to CLIP source choice. Policy A does not require the thumbnail to exist before CLIP runs, but the fallback works best if Phase 1 has already written the thumb when the source path fails.
 

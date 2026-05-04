@@ -43,7 +43,8 @@ Stage 1 — ingest and caching:
 
 - `scanner`: file discovery and raw path observation
 - `fingerprint`: stable id and moved-file detection
-- `metadata`: EXIF, width/height, duration, ffprobe
+- `metadata`: file/container/EXIF facts — size, mtime, MIME, width/height, duration, codec, captured time, raw metadata JSON, GPS
+- `geocoding`: EXIF GPS 좌표 → 지명 계층 태그, 결과 캐시. 온라인 standard mode에서 Phase 1 place fact로 materialize
 - `thumbnail`: eager thumbnail creation
 - `video`: lazy keyframe extraction
 - `analysis`: OpenCV face detection + embedding + person clustering
@@ -54,7 +55,6 @@ Stage 1 — ingest and caching:
 
 Stage 2 — semantic enrichment and NL search:
 
-- `geocoding`: GPS 좌표 → 지명 계층 태그, 결과 캐시
 - `embedding`: 이미지 멀티모달 임베딩(CLIP/SigLIP) 추출 및 저장; enabled
   only when the optional local AI pack and model cache are ready
 - `ocr`: 이미지 내 텍스트 추출
@@ -64,11 +64,28 @@ Stage 2 — semantic enrichment and NL search:
 - `search.vector`: `VectorIndexBackend` 인터페이스와 `LocalNumpyVectorIndex` 기본 구현
 - `search`: FTS5 keyword search + OCR/tag/shadow document + CLIP vector 후보를 RRF로 결합
 
+## Phase 1 Fact Contract
+
+Phase 1 owns facts that already exist in the original media or in the filesystem
+observation. These facts are materialized during scan/per-media refresh, not
+deferred to semantic search maintenance.
+
+- filesystem facts: `size_bytes`, `mtime_ns`, source root, relative path, current path
+- identity facts: `file_id`, partial hash, fingerprint version, media kind
+- container/image facts: MIME type, width, height, duration, codec
+- EXIF facts: captured datetime, raw EXIF/metadata JSON, GPS latitude/longitude
+- location facts: coordinate tags (`place`, `place_detail`) and reverse-geocoded place names when `PHOTOME_GEOCODING_ENABLED=1` and the runtime is not offline
+- deterministic local tags: filename/date-derived tags and face/person tags produced during the per-media refresh
+
+Phase 2 may rebuild search documents from these facts or backfill stale place
+tags after a version bump, but it does not own the source-of-truth extraction
+for file size, capture time, dimensions, or GPS-derived place facts.
+
 ## CLIP embedding input and phase split
 
 - **Policy A (default):** CLIP encodes from `current_path` first (NAS/source read). Thumbnail on derived storage is used only as a decode fallback. Originals are not copied wholesale to derived disk for embedding.
-- **Phase 1 (scan / per-media refresh):** For each image, after thumbnail generation, `ProcessingPipeline._materialize_image_semantics` runs when configured: OCR (prefers existing thumbnail via `_analysis_source_path` when present), optional CLIP embedding + CLIP auto-tags, and `search_documents` update. So the first full scan can already produce vectors and semantic rows while CLIP is enabled.
-- **Phase 2 (semantic maintenance):** Scheduled or manual `run_semantic_maintenance` / backfill fills gaps: missing embeddings, outdated `search_documents`, version mismatches. Re-encoding the same pixels under the same model/version is maintenance, not an accuracy multiplier.
+- **Phase 1 (scan / per-media refresh):** For each image, after metadata and thumbnail generation, `ProcessingPipeline._materialize_image_semantics` runs when configured: OCR (prefers existing thumbnail via `_analysis_source_path` when present), optional CLIP embedding + CLIP auto-tags, and `search_documents` update. So the first full scan can already produce vectors and semantic rows while CLIP is enabled.
+- **Phase 2 (semantic maintenance):** Scheduled or manual `run_semantic_maintenance` / backfill fills gaps: missing embeddings, outdated `search_documents`, version mismatches, or stale Phase 1-derived place tags after a place/search version bump. Re-encoding the same pixels under the same model/version is maintenance, not an accuracy multiplier.
 
 ## Phase 2 Cycle Contract
 
@@ -134,11 +151,14 @@ Terminal or divergent states:
 
 ## External Dependencies (Stage 2)
 
-- 역지오코딩: Nominatim 셀프호스트 또는 Kakao 로컬 API 중 택1, 환경변수 스위치
 - 임베딩 모델: SigLIP2 또는 OpenCLIP, HuggingFace weight 오프라인 캐시.
   배포 시 기본 앱에 포함하지 않고 optional local AI pack으로 분리한다.
 - LLM 쿼리 파서: 로컬 Ollama(Qwen 2.5) 또는 외부 API, JSON 스키마 강제
 - 벡터 인덱스: `VectorIndexBackend` 기준. 현재 local NumPy exact search, 확장 시 FAISS/LanceDB/Qdrant adapter
+
+## External Dependencies (Stage 1)
+
+- 역지오코딩: 기본 provider는 Nominatim이며 `PHOTOME_NOMINATIM_URL`로 셀프호스트 endpoint를 지정할 수 있다. `PHOTOME_OFFLINE_MODE=1`이면 자동 비활성화하고, `PHOTOME_GEOCODING_ENABLED=0`으로 standard mode에서도 끌 수 있다.
 
 ## Packaging Boundary
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, time
 import logging
 import re
 from pathlib import Path
@@ -26,9 +27,11 @@ from app.models.face import Face
 from app.models.media import MediaFile
 from app.models.person import Person
 from app.models.semantic import MediaAnalysisSignal, MediaOCR, MediaOCRGram, SearchDocument, SearchEvent, SearchFeedback, SearchWeightProfile
+from app.services.analysis.clip_lexicon import load_concept_aliases
 from app.services.search.vocab import TagVocabularyCache
 from app.models.tag import Tag
 from app.services.embedding import clip as clip_embedding
+from app.services.search.planner import QueryPlan
 from app.services.search.vector import build_vector_index, VectorIndexBackend
 from app.services.search.hybrid import FACE_HINTS, TEXT_HINTS
 from app.services.search.synonyms import load_tag_synonyms
@@ -93,7 +96,7 @@ class SqlAlchemyHybridSearchBackend:
                 promoted.add(str(file_id))
         return hidden, promoted
 
-    def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
+    def search_by_ocr(self, query: str, *, limit: int, plan: QueryPlan | None = None) -> list[dict]:
         pattern = _like_pattern(query)
         main_statement = (
             select(MediaFile, MediaOCR, MediaAnalysisSignal)
@@ -149,7 +152,7 @@ class SqlAlchemyHybridSearchBackend:
             row["ngram_score"] = hit_counts.get(fid, 0.0)
             rows.append(row)
 
-        return rows[:limit]
+        return self._filter_results(rows, plan, limit=limit)
 
     def _ngram_scored_ids(
         self, grams: list[str], *, exclude: set[str], limit: int
@@ -167,17 +170,17 @@ class SqlAlchemyHybridSearchBackend:
             if file_id not in exclude
         ]
 
-    def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]:
+    def search_by_shadow_doc(self, query: str, *, limit: int, plan: QueryPlan | None = None) -> list[dict]:
         tagged = self._tagged_shadow_results(query, limit=limit)
         hinted = self._hinted_shadow_results(query, limit=limit, exclude_file_ids={str(item["file_id"]) for item in tagged})
         if hinted:
-            return (tagged + hinted)[:limit]
+            return self._filter_results(tagged + hinted, plan, limit=limit)
         if tagged:
-            return tagged
+            return self._filter_results(tagged, plan, limit=limit)
 
         results = self._search_by_normalized_document(query, limit=limit)
         if results:
-            return results[:limit]
+            return self._filter_results(results, plan, limit=limit)
 
         pattern = _like_pattern(query)
         statement = (
@@ -215,7 +218,7 @@ class SqlAlchemyHybridSearchBackend:
                 tags=tags_by_file.get(fid, []),
                 face_count=face_counts.get(fid, 0),
             ))
-        return results[:limit]
+        return self._filter_results(results, plan, limit=limit)
 
     def _search_by_normalized_document(self, query: str, *, limit: int) -> list[dict]:
         fts_results = self._search_by_fts_document(query, limit=limit)
@@ -476,6 +479,7 @@ class SqlAlchemyHybridSearchBackend:
         place_filter: str | None = None,
         date_from: Any | None = None,
         date_to: Any | None = None,
+        plan: QueryPlan | None = None,
     ) -> list[dict]:
         hits = self._vector_index.search(
             query_embedding,
@@ -506,7 +510,7 @@ class SqlAlchemyHybridSearchBackend:
             result["embedding_model"] = hit.model_name
             result["embedding_version"] = hit.version
             results.append(result)
-        return results
+        return self._filter_results(results, plan, limit=limit)
 
     def encode_text(self, query: str) -> bytes:
         if not self._clip_enabled:
@@ -675,8 +679,170 @@ class SqlAlchemyHybridSearchBackend:
             )
         return payload
 
+    def _filter_results(self, results: list[dict], plan: QueryPlan | None, *, limit: int) -> list[dict]:
+        if plan is None or not plan.has_hard_filters():
+            return results[:limit]
+        filtered = [result for result in results if self._matches_query_plan_result(result, plan)]
+        return filtered[:limit]
+
+    def _matches_query_plan_result(self, result: dict, plan: QueryPlan) -> bool:
+        if not _matches_face_count(result, plan):
+            return False
+        if not _matches_date_range(result, plan):
+            return False
+        if not _matches_time_constraints(result, plan):
+            return False
+        if not _matches_place_terms(result, plan):
+            return False
+        if not self._matches_person_terms(result, plan):
+            return False
+        if not _matches_excluded_terms(result, plan):
+            return False
+        return True
+
+    def _matches_person_terms(self, result: dict, plan: QueryPlan) -> bool:
+        if not plan.requires_person_match():
+            return True
+        allowed_terms = self._expanded_person_terms(plan.person_terms)
+        result_person_terms = {
+            str(tag.get("value", "")).casefold()
+            for tag in (result.get("tags") or [])
+            if tag.get("type") in {"person", "people", "face", "auto_person"}
+        }
+        if not (allowed_terms & result_person_terms):
+            return False
+        if not plan.person_exclusive:
+            return True
+        informative_auto_terms = {
+            str(tag.get("value", "")).casefold()
+            for tag in (result.get("tags") or [])
+            if tag.get("type") == "auto_person"
+        } - self._generic_auto_person_terms()
+        if informative_auto_terms and not informative_auto_terms.issubset(allowed_terms):
+            return False
+        return True
+
+    def _expanded_person_terms(self, person_terms: list[str]) -> set[str]:
+        lowered_terms = {term.casefold() for term in person_terms if term}
+        expanded = set(lowered_terms)
+        for canonical, aliases in load_concept_aliases().items():
+            cluster = {canonical.casefold(), *[alias.casefold() for alias in aliases]}
+            if cluster & lowered_terms:
+                expanded |= cluster
+        return expanded
+
+    def _generic_auto_person_terms(self) -> set[str]:
+        aliases = load_concept_aliases()
+        generic: set[str] = {
+            "face", "faces", "portrait", "selfie", "human", "people", "person", "group",
+        }
+        for canonical in ("person", "group"):
+            generic.add(canonical.casefold())
+            generic.update(alias.casefold() for alias in aliases.get(canonical, ()))
+        return generic
+
 
 _LIKE_ESCAPE = "\\"
+
+
+def _matches_face_count(result: dict, plan: QueryPlan) -> bool:
+    count = int(result.get("face_count") or 0)
+    if plan.face_count_exact is not None and count != plan.face_count_exact:
+        return False
+    if plan.face_count_min is not None and count < plan.face_count_min:
+        return False
+    if plan.face_count_max is not None and count > plan.face_count_max:
+        return False
+    return True
+
+
+def _matches_date_range(result: dict, plan: QueryPlan) -> bool:
+    if not plan.require_date_match or plan.date_from is None:
+        return True
+    captured = result.get("captured_at")
+    if captured is None:
+        return False
+    try:
+        captured_dt = datetime.fromisoformat(captured) if isinstance(captured, str) else captured
+        date_from = datetime.combine(plan.date_from, time.min)
+        date_to = datetime.combine(plan.date_to, time.max) if plan.date_to else None
+        return captured_dt >= date_from and (date_to is None or captured_dt <= date_to)
+    except Exception:
+        return False
+
+
+def _matches_place_terms(result: dict, plan: QueryPlan) -> bool:
+    if not plan.require_place_match or not plan.place_terms:
+        return True
+    place_set = {term.casefold() for term in plan.place_terms}
+    tag_values = {str(tag.get("value", "")).casefold() for tag in (result.get("tags") or [])}
+    return bool(place_set & tag_values)
+
+
+_DAYPART_HOURS: dict[str, tuple[int, int]] = {
+    "dawn": (4, 7),
+    "morning": (5, 11),
+    "noon": (11, 14),
+    "afternoon": (12, 17),
+    "evening": (17, 21),
+    "night": (21, 24),
+}
+
+_GENERIC_ABSENT_PERSON_TERMS = {"face", "faces", "person", "people", "human", "얼굴", "사람", "인물"}
+
+
+def _matches_time_constraints(result: dict, plan: QueryPlan) -> bool:
+    if plan.daypart is None and not plan.allowed_weekdays:
+        return True
+    captured = result.get("captured_at")
+    if captured is None:
+        return False
+    try:
+        captured_dt = datetime.fromisoformat(captured) if isinstance(captured, str) else captured
+    except Exception:
+        return False
+
+    if plan.allowed_weekdays and captured_dt.weekday() not in set(plan.allowed_weekdays):
+        return False
+
+    if plan.daypart is not None:
+        hour = captured_dt.hour
+        start, end = _DAYPART_HOURS.get(plan.daypart, (0, 24))
+        if plan.daypart == "night":
+            if hour < start and hour >= 4:
+                return False
+        elif hour < start or hour >= end:
+            return False
+
+    return True
+
+
+def _matches_excluded_terms(result: dict, plan: QueryPlan) -> bool:
+    excluded_terms = {term.casefold() for term in (plan.excluded_terms or []) if term}
+    if not excluded_terms:
+        return True
+    tag_values = {str(tag.get("value", "")).casefold() for tag in (result.get("tags") or [])}
+    ocr_text = str(result.get("ocr_text") or "").casefold()
+    expanded_excluded = _expanded_filter_terms(excluded_terms)
+
+    if expanded_excluded & _GENERIC_ABSENT_PERSON_TERMS:
+        if int(result.get("face_count") or 0) > 0:
+            return False
+        expanded_excluded -= _GENERIC_ABSENT_PERSON_TERMS
+
+    if expanded_excluded & tag_values:
+        return False
+
+    return not any(term and len(term) >= 2 and term in ocr_text for term in expanded_excluded)
+
+
+def _expanded_filter_terms(terms: set[str]) -> set[str]:
+    expanded = set(terms)
+    for canonical, aliases in load_concept_aliases().items():
+        cluster = {canonical.casefold(), *[alias.casefold() for alias in aliases]}
+        if cluster & terms:
+            expanded |= cluster
+    return expanded
 
 
 def _like_pattern(query: str) -> str:

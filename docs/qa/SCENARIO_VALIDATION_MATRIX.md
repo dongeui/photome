@@ -11,6 +11,7 @@
 | partial upload | file size changes between checks | item not processed too early | stays `waiting_stable` | Critical | No |
 | NAS offline | mount unavailable during polling | API still serves existing metadata | scan run fails gracefully, no data corruption | Critical | No |
 | image metadata missing | EXIF absent or malformed | item still listed | metadata fallback used, no crash | High | No |
+| image media facts | image contains EXIF/GPS/dimensions | gallery/search can use file size, date, dimensions, and place facts | `MediaFile` stores size/time/MIME/dimensions/metadata_json; GPS yields `place`/`place_detail` and geocoded place tags when enabled | Critical | No |
 | ffprobe failure | broken or unsupported video | item still visible with error note | stage moves to `error` or partial metadata | High | No |
 | thumb generation failure | Pillow/OpenCV error | item detail still resolves | error logged, retryable state saved | High | No |
 | filter by media type | `GET /media?media_type=image` | only requested type returned | query uses indexed filter | Medium | No |
@@ -19,7 +20,7 @@
 
 | Scenario | Trigger | Expected User-visible Result | Expected Internal State | Priority | Verified |
 |---|---|---|---|---|---|
-| GPS → 지명 태그 | 좌표 포함 이미지 처리 | `/media/filter?tag=제주` 로 검색 가능 | `place:country/region/city` 계층 태그 생성, 역지오코딩 캐시 적중 | Critical | No |
+| GPS/place search document 반영 | Phase 1에서 GPS/지명 태그 생성 후 semantic maintenance | `"스위스에서 찍은 사진"` 같은 place query가 결과 반환 | `search_documents.places_json`과 FTS/shadow text에 Phase 1 place tags 반영 | Critical | No |
 | CLIP 임베딩 생성 | 신규 이미지 썸네일 완료 후 | 해당 파일이 자연어 검색 후보로 등장 | `DerivedAsset(asset_kind="embedding_clip")` 등록, 상태 `embedding_done` | Critical | No |
 | 자연어 쿼리 파싱 | `/search?q=작년에 제주에서 가족이랑` | 상위 결과가 조건에 부합 | 파서 JSON `{time, place, people, semantic}` 출력, 필드별 필터 적용 | Critical | No |
 | 파서 실패 폴백 | LLM 응답이 JSON 스키마 위반 | 쿼리는 여전히 결과 반환 | `semantic-only` 폴백 동작, 메타 필터 생략 | High | No |

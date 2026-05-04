@@ -1,5 +1,5 @@
 # Product History
-updated 2026-04-29 (세션 4)
+updated 2026-05-04 (Phase 1 media facts)
 
 ## 2026-04-22
 
@@ -71,7 +71,7 @@ updated 2026-04-29 (세션 4)
 - `models/semantic.py`: `GeocodingCache` 테이블 추가 (key, country, region, city, place, display_name)
 - `services/geocoding/__init__.py`: `NominatimProvider` (OSM 공개 API, 1req/s 레이트 리밋, `PHOTOME_NOMINATIM_URL` 커스텀 가능)
 - `services/geocoding/cached.py`: `CachedGeocodingService` — DB 캐시 래퍼 (precision=3 좌표 키)
-- `pipeline.py`: `_materialize_place_tags()`에 geocoding 통합. `geocoding_enabled=True` + session 전달 시 도시/지역 이름 태그 추가. 기본값 off
+- `pipeline.py`: `_materialize_place_tags()`에 geocoding 통합. `geocoding_enabled=True` + session 전달 시 도시/지역 이름 태그 추가. 이후 2026-05-04에 Phase 1 place fact로 승격하고 standard mode 기본값을 on으로 변경
 - `api/people.py`: Person 관리 API 신규 — `GET /people`, `GET /people/{id}`, `PATCH /people/{id}`, `GET /people/{id}/media`
 - `backend.py`: `_resolve_person_tag_ids()` 추가 — Person.display_name과 쿼리 토큰 매칭 → person 태그 ID로 변환해 이름으로 사람 검색 가능
 
@@ -198,3 +198,13 @@ updated 2026-04-29 (세션 4)
 ### 변경된 파일 목록
 `app/services/search/`: query_translate.py, planner.py, hybrid.py  
 `app/services/semantic/`: catalog.py
+
+## 2026-05-04 — Phase 1 media facts + 자연어 검색 기반 강화
+
+- 제품 경계를 `Phase 1 = 원본/파일시스템 기반 media facts 확정`, `Phase 2 = 검색 보강 및 stale/version mismatch catch-up`으로 재정의했다.
+- Phase 1 fact 범위는 `size_bytes`, `mtime_ns`, MIME, width/height, duration, codec, `exif_datetime`, raw `metadata_json`, EXIF GPS, coordinate/place tags, deterministic filename/date/person tags다.
+- reverse geocoding은 Stage 2 semantic enrichment가 아니라 EXIF GPS 기반 Phase 1 place fact로 이동했다. standard mode 기본값은 enabled이며, `PHOTOME_OFFLINE_MODE=1`에서는 네트워크 호출을 막는다.
+- `PHOTOME_GEOCODING_ENABLED`를 설정으로 추가했다. 기본값은 standard mode `true`, offline mode `false`다.
+- `semantic_place_version` 기본값을 `place-v2`, `semantic_search_version` 기본값을 `search-v3`로 올려 기존 라이브러리의 place tag/search document catch-up을 semantic maintenance에서 수행하게 했다.
+- 자연어 검색 방향은 하드코딩 쿼리 대응이 아니라 `QueryPlan` 구조화 조건(count/exclusive/negation/daypart/weekday/place/date)과 DB-driven vocabulary를 조합하는 방식으로 확정했다.
+- 운영 UI 기준은 내부 job명(`semantic_maintenance`, `semantic_backfill`)이 아니라 `Phase 1 / Phase 2` 실행 여부와 진행률로 정리했다.

@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         semantic_embedding_version=settings.semantic_embedding_version,
         semantic_auto_tag_version=settings.semantic_auto_tag_version,
         semantic_search_version=settings.semantic_search_version,
-        geocoding_enabled=False,
+        geocoding_enabled=settings.geocoding_enabled and not settings.offline_mode,
     )
     recovery = pipeline.recover_interrupted_library_jobs()
     scheduler = SchedulerService(settings, pipeline, database.session_factory)

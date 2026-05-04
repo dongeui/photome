@@ -14,7 +14,7 @@ Includes:
 
 - FastAPI app, dashboard, gallery, search UI
 - SQLite schema and local processing pipeline
-- Stage 1 scan/cache pipeline
+- Stage 1 scan/cache/media-fact pipeline: filesystem facts, MIME, dimensions, duration, capture time, EXIF GPS, coordinate/place tags
 - Stage 2 search document, OCR, tag, date, place, feedback, and FTS logic
 - lightweight Python dependencies
 
@@ -62,6 +62,7 @@ Expected size target:
 
 - `PHOTOME_CLIP_ENABLED=0`
 - app remains fully usable without local AI pack
+- Phase 1 still extracts file size, dimensions, capture time, EXIF GPS, and place facts
 - search uses filename, OCR, custom tags, auto signal tags, date, GPS/place,
   annotations, and FTS/shadow documents
 - Phase 2 skips CLIP embedding generation
@@ -115,9 +116,9 @@ Use one repo with package profiles.
 Version dimensions:
 
 - app version: server/UI/API behavior, e.g. `0.2.0`
-- semantic search version: search document schema/logic, e.g. `search-v2`
+- semantic search version: search document schema/logic, e.g. `search-v3`
 - embedding version: vector generation contract, e.g. `embedding-v1`
-- auto tag version: concept/alias set, e.g. `auto-v2`
+- auto tag version: concept/alias set, e.g. `auto-v3`
 - model pack version: bundled local AI runtime/weights, e.g. `ai-pack-2026.05`
 
 Compatibility rules:

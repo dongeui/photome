@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import chain
 from datetime import date
 import logging
 import re
@@ -26,9 +27,14 @@ DATE_STOP_TERMS = {
     "지난달", "저번달", "이번달", "이번", "달",
     "이번주", "지난주", "저번주", "이번주말", "지난주말", "저번주말", "주",
     "봄", "여름", "가을", "겨울", "spring", "summer", "fall", "autumn", "winter",
+    "아침", "오전", "점심", "낮", "오후", "저녁", "밤", "야간", "새벽",
+    "morning", "afternoon", "evening", "night", "dawn", "noon",
+    "주말", "평일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     "오늘", "어제", "그제",
     "설날", "추석", "크리스마스", "성탄절",
-    "전", "전날", "며칠전",
+    "전", "전날", "며칠전", "날",
+    "없는", "없이", "말고", "제외", "빼고",
 }
 
 
@@ -45,6 +51,15 @@ class QueryPlan:
     ocr_terms: list[str]
     visual_terms: list[str]
     intent: str
+    face_count_min: int | None = None
+    face_count_max: int | None = None
+    face_count_exact: int | None = None
+    person_exclusive: bool = False
+    require_place_match: bool = False
+    require_date_match: bool = False
+    excluded_terms: list[str] | None = None
+    daypart: str | None = None
+    allowed_weekdays: list[int] | None = None
 
     def to_meta(self) -> dict:
         return {
@@ -58,7 +73,42 @@ class QueryPlan:
             "ocr_terms": self.ocr_terms,
             "visual_terms": self.visual_terms,
             "intent": self.intent,
+            "face_count_min": self.face_count_min,
+            "face_count_max": self.face_count_max,
+            "face_count_exact": self.face_count_exact,
+            "person_exclusive": self.person_exclusive,
+            "require_place_match": self.require_place_match,
+            "require_date_match": self.require_date_match,
+            "excluded_terms": list(self.excluded_terms or []),
+            "daypart": self.daypart,
+            "allowed_weekdays": list(self.allowed_weekdays or []),
         }
+
+    def has_face_count_filter(self) -> bool:
+        return any(value is not None for value in (self.face_count_min, self.face_count_max, self.face_count_exact))
+
+    def requires_person_match(self) -> bool:
+        return bool(self.person_terms) and (self.person_exclusive or self.has_face_count_filter())
+
+    def has_hard_filters(self) -> bool:
+        return any((
+            self.has_face_count_filter(),
+            self.requires_person_match(),
+            self.require_place_match,
+            self.require_date_match,
+            bool(self.excluded_terms),
+            self.daypart is not None,
+            bool(self.allowed_weekdays),
+        ))
+
+    def has_non_relaxable_filters(self) -> bool:
+        return any((
+            self.has_face_count_filter(),
+            self.requires_person_match(),
+            bool(self.excluded_terms),
+            self.daypart is not None,
+            bool(self.allowed_weekdays),
+        ))
 
 
 def plan_query(query: str, *, tag_vocab: "TagVocabulary | None" = None) -> QueryPlan:
@@ -78,10 +128,19 @@ def plan_query(query: str, *, tag_vocab: "TagVocabulary | None" = None) -> Query
                                              tag_vocab.place_tags if tag_vocab else None)
     ocr_terms = _matching_terms(tokens, normalized, OCR_TERMS)
     visual_terms = _matching_terms(tokens, normalized, VISUAL_TERMS)
+    excluded_terms = _extract_excluded_terms(query, person_terms, place_terms, ocr_terms, visual_terms)
+    excluded_set = {term.casefold() for term in excluded_terms}
+    person_terms = [term for term in person_terms if term.casefold() not in excluded_set]
+    place_terms = [term for term in place_terms if term.casefold() not in excluded_set]
+    ocr_terms = [term for term in ocr_terms if term.casefold() not in excluded_set]
+    visual_terms = [term for term in visual_terms if term.casefold() not in excluded_set]
+    face_count_min, face_count_max, face_count_exact = _extract_face_count_constraint(normalized)
+    daypart = _extract_daypart(normalized)
+    allowed_weekdays = _extract_allowed_weekdays(normalized)
     keyword_tokens = [
         token
         for token in tokens
-        if token not in DATE_STOP_TERMS and not _is_year_token(token)
+        if token not in DATE_STOP_TERMS and not _is_year_token(token) and token.casefold() not in excluded_set
     ]
     keyword_query = " ".join(keyword_tokens) if keyword_tokens else normalized
     visual_queries = query_translate.expand_for_clip(normalized)
@@ -94,6 +153,9 @@ def plan_query(query: str, *, tag_vocab: "TagVocabulary | None" = None) -> Query
         keyword_query=keyword_query,
         normalized_query=normalized,
     )
+    person_exclusive = _has_person_exclusive_marker(query, person_terms)
+    require_place_match = _requires_place_match(query, place_terms)
+    require_date_match = date_from is not None
     return QueryPlan(
         original_query=query,
         normalized_query=normalized,
@@ -106,6 +168,15 @@ def plan_query(query: str, *, tag_vocab: "TagVocabulary | None" = None) -> Query
         ocr_terms=ocr_terms,
         visual_terms=visual_terms,
         intent=intent,
+        face_count_min=face_count_min,
+        face_count_max=face_count_max,
+        face_count_exact=face_count_exact,
+        person_exclusive=person_exclusive,
+        require_place_match=require_place_match,
+        require_date_match=require_date_match,
+        excluded_terms=excluded_terms,
+        daypart=daypart,
+        allowed_weekdays=allowed_weekdays,
     )
 
 
@@ -226,6 +297,147 @@ def _matching_terms_with_vocab(
 
 def _is_year_token(token: str) -> bool:
     return bool(re.fullmatch(r"(20\d{2}|[2-9]\d)년?", token))
+
+
+_NUMBER_WORDS: dict[str, int] = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+}
+
+_COUNT_PATTERN = re.compile(
+    r"(?P<prefix>정확히|딱)?\s*(?P<number>\d+|한|하나|두|둘|세|셋|네|넷|다섯|여섯|일곱|여덟|아홉|열)\s*"
+    r"(?P<unit>명|사람|인|얼굴)"
+)
+
+
+def _extract_face_count_constraint(text: str) -> tuple[int | None, int | None, int | None]:
+    lowered = text.casefold()
+    if any(marker in lowered for marker in ("혼자", "단독", "solo")):
+        return None, None, 1
+
+    for match in _COUNT_PATTERN.finditer(lowered):
+        raw_number = match.group("number")
+        parsed = _parse_count_value(raw_number)
+        if parsed is None:
+            continue
+        prefix = match.group("prefix") or ""
+        suffix = lowered[match.end(): match.end() + 16]
+        if "이상" in suffix or "이거나 이상" in suffix:
+            return parsed, None, None
+        if any(token in suffix for token in ("초과", "넘게", "넘는", "넘은", "보다 많은")):
+            return parsed + 1, None, None
+        if "이하" in suffix:
+            return None, parsed, None
+        if any(token in suffix for token in ("미만", "보다 적은", "안되는")):
+            return None, max(0, parsed - 1), None
+        if prefix or any(token in suffix for token in ("만", "뿐")):
+            return None, None, parsed
+        return None, None, parsed
+    return None, None, None
+
+
+def _parse_count_value(value: str) -> int | None:
+    if value.isdigit():
+        return int(value)
+    return _NUMBER_WORDS.get(value)
+
+
+def _has_person_exclusive_marker(query: str, person_terms: list[str]) -> bool:
+    lowered = query.casefold()
+    for term in sorted(person_terms, key=len, reverse=True):
+        if re.search(rf"{re.escape(term)}\s*(?:만|뿐)", lowered):
+            return True
+    return False
+
+
+def _requires_place_match(query: str, place_terms: list[str]) -> bool:
+    if not place_terms:
+        return False
+    lowered = query.casefold()
+    return bool(re.search(r"(에서|에서의|\bin\b|\bat\b|\bnear\b|\bfrom\b)", lowered))
+
+
+_EXCLUSION_MARKERS = ("없이", "없는", "말고", "제외", "빼고", "without", "except", "excluding")
+
+_DAYPART_ALIASES: dict[str, tuple[str, ...]] = {
+    "dawn": ("새벽", "이른아침", "dawn"),
+    "morning": ("아침", "오전", "morning"),
+    "noon": ("점심", "정오", "noon"),
+    "afternoon": ("낮", "오후", "afternoon"),
+    "evening": ("저녁", "evening"),
+    "night": ("밤", "야간", "심야", "night"),
+}
+
+_WEEKDAY_ALIASES: dict[int, tuple[str, ...]] = {
+    0: ("월요일", "월", "monday", "mon"),
+    1: ("화요일", "화", "tuesday", "tue"),
+    2: ("수요일", "수", "wednesday", "wed"),
+    3: ("목요일", "목", "thursday", "thu"),
+    4: ("금요일", "금", "friday", "fri"),
+    5: ("토요일", "토", "saturday", "sat"),
+    6: ("일요일", "일", "sunday", "sun"),
+}
+
+
+def _extract_excluded_terms(
+    query: str,
+    person_terms: list[str],
+    place_terms: list[str],
+    ocr_terms: list[str],
+    visual_terms: list[str],
+) -> list[str]:
+    lowered = query.casefold()
+    excluded: list[str] = []
+    candidates = sorted(
+        {term.casefold() for term in chain(person_terms, place_terms, ocr_terms, visual_terms) if term},
+        key=len,
+        reverse=True,
+    )
+    for term in candidates:
+        if any(re.search(rf"{re.escape(term)}\s*{marker}", lowered) for marker in _EXCLUSION_MARKERS):
+            excluded.append(term)
+    return list(dict.fromkeys(excluded))
+
+
+def _extract_daypart(query: str) -> str | None:
+    lowered = query.casefold()
+    for canonical, aliases in _DAYPART_ALIASES.items():
+        if any(alias in lowered for alias in aliases):
+            return canonical
+    return None
+
+
+def _extract_allowed_weekdays(query: str) -> list[int]:
+    lowered = query.casefold()
+    if "주말" in lowered or "weekend" in lowered:
+        return [5, 6]
+    if "평일" in lowered or "weekday" in lowered:
+        return [0, 1, 2, 3, 4]
+
+    matched: list[int] = []
+    for weekday, aliases in _WEEKDAY_ALIASES.items():
+        for alias in aliases:
+            if len(alias) == 1:
+                if re.search(rf"{re.escape(alias)}요일", lowered):
+                    matched.append(weekday)
+                    break
+                continue
+            if alias in lowered:
+                matched.append(weekday)
+                break
+    return sorted(dict.fromkeys(matched))
 
 
 def _intent(

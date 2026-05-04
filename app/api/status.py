@@ -19,9 +19,11 @@ from app.core.settings import AppSettings
 from app.services.analysis.opencv_zoo import SFACE_MODEL, YU_NET_MODEL, _is_valid_model_file
 from app.services.embedding import clip as clip_embedding
 from app.services.processing.registry import MediaCatalog
+from app.models.face import Face
 from app.models.job import ProcessingJob
 from app.models.media import MediaFile
 from app.models.semantic import MediaAutoTagState, MediaEmbedding, SearchDocument
+from app.models.tag import Tag
 from sqlalchemy import select
 from sqlalchemy import func
 
@@ -33,6 +35,45 @@ _SECURITY_CACHE: tuple[tuple[Any, ...], datetime, dict[str, Any]] | None = None
 
 def _schedule_label(hours: int | None) -> str:
     return "None" if hours is None else f"{hours}h"
+
+
+def _dashboard_job_progress(job: dict[str, Any] | None) -> str:
+    if not job:
+        return "Idle"
+    result = job.get("result") or {}
+    progress = result.get("progress") or {}
+    kind = str(job.get("job_kind") or "")
+    status_name = str(job.get("status") or "unknown")
+
+    if kind == "scan":
+        processed = progress.get("processed") or {}
+        if processed.get("total") is not None:
+            return (
+                f"{status_name.upper()} · assets {processed.get('current', 0)} / {processed.get('total')} · "
+                f"ok {processed.get('succeeded', 0)} · failed {processed.get('failed', 0)}"
+            )
+        summary = progress.get("summary") or {}
+        if summary.get("scanned") is not None:
+            return f"{status_name.upper()} · scanned {summary.get('scanned')} · failed {summary.get('failed', 0)}"
+        return f"{status_name.upper()} · {progress.get('stage') or progress.get('message') or 'working'}"
+
+    chunk = progress.get("chunk")
+    pending = progress.get("pending")
+    current = progress.get("current")
+    total_done = progress.get("total_succeeded", progress.get("succeeded", 0))
+    total_failed = progress.get("total_failed", progress.get("failed", 0))
+    total_embeddings = progress.get("total_embeddings_created", progress.get("embeddings_created", 0))
+    total_tags = progress.get("total_auto_tag_values", progress.get("auto_tag_values", 0))
+    parts = [status_name.upper()]
+    if chunk is not None:
+        parts.append(f"chunk {chunk}")
+    if pending is not None or current is not None:
+        parts.append(f"batch {current or 0} / {pending or current or 0}")
+    parts.append(f"done {total_done}")
+    parts.append(f"failed {total_failed}")
+    parts.append(f"embeddings +{total_embeddings}")
+    parts.append(f"tags +{total_tags}")
+    return " · ".join(parts)
 
 
 def _security_snapshot(settings: AppSettings) -> dict[str, Any]:
@@ -158,13 +199,47 @@ async def dashboard(request: Request) -> HTMLResponse:
     settings: AppSettings = require_state(request, "settings")
     scheduler = payload["scheduler"]
     semantic = payload["semantic"]
+    performance = payload["performance"]
     catalog = payload["catalog"]
     jobs = payload["jobs"]
     health = payload["health"]
     security = payload["security"]
     source_roots = payload["storage"]["source_roots"]
+    known_source_roots = payload["storage"].get("known_source_roots") or []
     source_roots_text = escape("\n".join(source_roots))
+    known_source_roots_html = (
+        "<br>".join(escape(path) for path in known_source_roots)
+        if known_source_roots
+        else '<span class="muted">No cataloged source roots yet</span>'
+    )
     active_library_job_json = json.dumps(jobs.get("active_library_job"), default=str)
+    active_job = jobs.get("active_library_job")
+    active_kind = str((active_job or {}).get("job_kind") or "")
+    active_status = str((active_job or {}).get("status") or "")
+    has_active_job = active_status in {"queued", "running"}
+    phase1_active = has_active_job and active_kind == "scan"
+    phase2_active = has_active_job and active_kind in {"semantic_backfill", "semantic_maintenance"}
+    phase1_card_class = "card scan-card is-running" if phase1_active else "card scan-card"
+    phase2_card_class = "card scan-card is-running" if phase2_active else "card scan-card"
+    phase1_state_text = "RUNNING" if phase1_active else ("WAITING" if phase2_active else "IDLE")
+    phase2_state_text = "RUNNING" if phase2_active else ("WAITING" if phase1_active else "IDLE")
+    phase1_state_class = "status-running" if phase1_active else ("status-warn" if phase2_active else "status-idle")
+    phase2_state_class = "status-running" if phase2_active else ("status-warn" if phase1_active else "status-idle")
+    phase1_scan_disabled = " disabled" if phase2_active else ""
+    phase2_run_disabled = " disabled" if (phase1_active or phase2_active) else ""
+    phase2_cancel_display = "" if phase2_active else "display:none"
+    phase1_live_class = "live-panel is-running" if phase1_active else ("live-panel is-waiting" if phase2_active else "live-panel")
+    phase2_live_class = "live-panel is-running" if phase2_active else ("live-panel is-waiting" if phase1_active else "live-panel")
+    phase1_live_text = (
+        _dashboard_job_progress(active_job)
+        if phase1_active
+        else ("WAITING · Phase 2 is running" if phase2_active else "IDLE · ready")
+    )
+    phase2_live_text = (
+        _dashboard_job_progress(active_job)
+        if phase2_active
+        else ("WAITING · Phase 1 is running" if phase1_active else "IDLE · ready")
+    )
     phase1_schedule_label = _schedule_label(payload["scheduler"].get("phase1_interval_hours"))
     phase2_schedule_label = _schedule_label(payload["scheduler"].get("phase2_interval_hours"))
     semantic_coverage = semantic["coverage"]
@@ -312,6 +387,13 @@ async def dashboard(request: Request) -> HTMLResponse:
       font-size: 1.05rem;
       letter-spacing: -0.02em;
     }}
+    .metric small {{
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.35;
+    }}
     .pill-row {{
       display: flex;
       gap: 8px;
@@ -334,6 +416,59 @@ async def dashboard(request: Request) -> HTMLResponse:
     }}
     .status-ok {{ color: var(--ok); }}
     .status-warn {{ color: var(--warn); }}
+    .status-idle {{ color: var(--muted); }}
+    .status-running {{
+      color: var(--accent);
+      font-weight: 900;
+      letter-spacing: .08em;
+    }}
+    .run-badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: rgba(19,32,42,0.05);
+      border: 1px solid rgba(19,32,42,0.08);
+      font-size: .78rem;
+      font-weight: 900;
+      letter-spacing: .08em;
+    }}
+    .run-badge.is-running {{
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-color: rgba(204,95,50,0.28);
+      box-shadow: 0 8px 22px rgba(204,95,50,0.12);
+    }}
+    .run-badge.is-running::before {{
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 5px rgba(204,95,50,0.12);
+    }}
+    .live-panel {{
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(19,32,42,0.04);
+      border: 1px solid rgba(19,32,42,0.07);
+      color: var(--muted);
+      font: .84rem "SFMono-Regular", "Menlo", monospace;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }}
+    .live-panel.is-running {{
+      color: var(--text);
+      background: rgba(204,95,50,0.10);
+      border-color: rgba(204,95,50,0.24);
+    }}
+    .live-panel.is-waiting {{
+      color: var(--warn);
+      background: rgba(180,106,21,0.08);
+      border-color: rgba(180,106,21,0.18);
+    }}
     .list {{
       display: grid;
       gap: 10px;
@@ -419,8 +554,15 @@ async def dashboard(request: Request) -> HTMLResponse:
       opacity: .62;
       cursor: progress;
     }}
+    .field-help {{
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 500;
+      line-height: 1.4;
+    }}
     .scan-card.is-running {{
       border-color: rgba(204,95,50,0.32);
+      box-shadow: 0 18px 45px rgba(204,95,50,0.12);
     }}
     .scan-card.is-running .scan-title::after {{
       content: "";
@@ -433,6 +575,16 @@ async def dashboard(request: Request) -> HTMLResponse:
       border-top-color: var(--accent);
       vertical-align: -2px;
       animation: spin 850ms linear infinite;
+    }}
+    .live-status {{
+      color: var(--muted);
+      font-family: "SFMono-Regular", "Menlo", monospace;
+      font-size: .78rem;
+      text-align: right;
+    }}
+    .scan-card.is-running .live-status {{
+      color: var(--accent);
+      font-weight: 800;
     }}
     @keyframes spin {{
       to {{ transform: rotate(360deg); }}
@@ -561,7 +713,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         <div>
         <span class="eyebrow">Local Service Status</span>
         <h1>Your photo library.</h1>
-        <p>Phase 1 scans your photo folders and keeps the catalog up to date. Phase 2 runs AI analysis — face recognition, place tagging, text extraction, and image search indexing — so every photo is findable.</p>
+        <p>Phase 1 imports original media facts and derived assets. Phase 2 makes those photos searchable with text, people, places, embeddings, and index refreshes.</p>
         <div class="pill-row" style="margin-top:14px;">
           <span class="pill"><strong>Runtime</strong> {escape(security["runtime_mode"])}</span>
           <span class="pill"><strong>Network</strong> {'offline · blocked' if not security['outbound_network_enabled'] else 'online'}</span>
@@ -572,72 +724,97 @@ async def dashboard(request: Request) -> HTMLResponse:
       </div>
       <div class="metric-grid">
         <div class="metric">
-          Photos cataloged
-          <strong id="m-catalog">{catalog["total"]} items</strong>
+          Library indexed
+          <strong id="m-total">{performance["total_media"]} items</strong>
+          <small>Original media tracked from source roots</small>
         </div>
         <div class="metric">
-          Search indexed
-          <strong id="m-search">{semantic_coverage["search_current"]} / {semantic_coverage["eligible_media"]}</strong>
+          Search-ready
+          <strong id="m-search-ready">{performance["search_ready"]} / {performance["eligible_media"]}</strong>
+          <small id="m-search-ready-note">{performance["search_ready_percent"]}% of searchable media</small>
         </div>
         <div class="metric">
-          AI embeddings
-          <strong id="m-clip">{semantic_coverage["clip_embeddings_current"]} / {semantic_coverage["eligible_media"]}</strong>
+          Generated tags
+          <strong id="m-tags">{performance["generated_tags"]}</strong>
+          <small id="m-tags-note">{performance["tagged_media"]} media with tags</small>
         </div>
         <div class="metric">
-          Pending analysis
-          <strong id="m-pending">{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI</strong>
+          Place facts
+          <strong id="m-places">{performance["place_tagged_media"]}</strong>
+          <small>GPS / geocoded place coverage</small>
         </div>
         <div class="metric">
-          Missing files
-          <strong id="m-missing">{health["missing"]}</strong>
+          People signals
+          <strong id="m-people">{performance["faces_detected"]}</strong>
+          <small id="m-people-note">{performance["people_media"]} media with faces</small>
         </div>
         <div class="metric">
-          Errors
-          <strong id="m-errors">{health["error"]}</strong>
+          AI visual coverage
+          <strong id="m-ai">{performance["clip_embeddings"]} / {performance["eligible_media"]}</strong>
+          <small id="m-ai-note">{performance["clip_coverage_percent"]}% embedded · {performance["remaining_clip"]} left</small>
         </div>
       </div>
     </section>
 
     <section class="grid">
-      <article class="card scan-card" id="phase1-card">
-        <h2 class="scan-title">Photo Library Scan</h2>
-        <p class="sub">Scans your photo folders, imports new files, and keeps the catalog in sync with your originals.</p>
+      <article class="{phase1_card_class}" id="phase1-card">
+        <h2 class="scan-title">Phase 1 · Library Scan <span id="phase1-state-badge" class="run-badge {'is-running' if phase1_active else ''}">{phase1_state_text}</span></h2>
+        <p class="sub">Scans NAS/original source folders and imports media facts: size, date, dimensions, GPS/place tags, thumbnails, faces, and first-pass assets. Local cache storage is configured separately as the derived root.</p>
+        <div id="phase1-live-panel" class="{phase1_live_class}">
+          <strong>Progress</strong><br>
+          <span id="phase1-live-detail">{escape(phase1_live_text)}</span>
+        </div>
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if scheduler['enabled'] else 'status-warn'}">{escape(str(scheduler['enabled']))}</span></span>
-          <span class="pill"><strong>Running</strong> <span class="{'status-ok' if scheduler['running'] else 'status-warn'}">{escape(str(scheduler['running']))}</span></span>
+          <span class="pill"><strong>State</strong> <span id="phase1-state-text" class="{phase1_state_class}">{phase1_state_text}</span></span>
+          <span class="pill"><strong>Scheduler</strong> <span class="{'status-ok' if scheduler['running'] else 'status-warn'}">{escape(str(scheduler['running']))}</span></span>
           <span class="pill"><strong>Poll</strong> {scheduler['poll_interval_seconds']}s</span>
           <button type="button" class="pill pill-button" id="phase1-schedule-button" title="Click to cycle auto-run interval: Off → 6h → 12h → 24h"><strong>Auto-run</strong> {phase1_schedule_label}</button>
         </div>
         <div class="list" style="margin-top:14px;">
+          <div class="row"><span>Current job</span><span id="p1-current-job" class="live-status">idle</span></div>
+          <div class="row"><span>Progress</span><span id="p1-progress" class="live-status">—</span></div>
           <div class="row"><span>Last poll</span><span id="p1-last-poll">{escape(str(scheduler['last_poll_at']))}</span></div>
           <div class="row"><span>Next poll</span><span id="p1-next-poll">{escape(str(scheduler['next_poll_at']))}</span></div>
           <div class="row"><span>Last full scan</span><span id="p1-last-scan">{escape(str(scheduler['last_full_scan_at']))}</span></div>
           <div class="row"><span>Next full scan</span><span id="p1-next-scan">{escape(str(scheduler['next_full_scan_at']))}</span></div>
           <div class="row"><span>Missing files</span><span id="p1-missing" class="{'status-warn' if health['missing'] else ''}">{health["missing"]} {'— re-run Scan Now to attempt re-detection' if health['missing'] else ''}</span></div>
         </div>
-        <form class="scan-form" id="phase1-scan-form">
+        <form class="scan-form" id="phase1-scan-form" onsubmit="return false">
           <label>
-            Source roots
+            NAS / original source roots
             <textarea id="phase1-source-roots" name="source_roots" spellcheck="false">{source_roots_text}</textarea>
+            <span class="field-help">One path per line. This should be the original media location, e.g. <code>/Volumes/homes/dejeong/Photos</code>. Photome reads these files and writes generated cache under the local derived root below.</span>
           </label>
+          <div class="list">
+            <div class="row"><span>Local cache root</span><span><code>{escape(payload['storage']['derived_root'])}</code></span></div>
+            <div class="row"><span>Cataloged source roots</span><span>{known_source_roots_html}</span></div>
+          </div>
           <div class="scan-actions">
-            <button type="submit" id="phase1-scan-button">Scan Now</button>
+            <button type="button" id="phase1-scan-button"{phase1_scan_disabled}>Scan Now</button>
           </div>
           <pre class="scan-result" id="phase1-scan-result" aria-live="polite"></pre>
         </form>
       </article>
 
-      <article class="card scan-card" id="phase2-card">
-        <h2 class="scan-title">AI Analysis</h2>
-        <p class="sub">Runs face recognition, place tagging, text extraction, and image search indexing on your photos.</p>
+      <article class="{phase2_card_class}" id="phase2-card">
+        <h2 class="scan-title">Phase 2 · Search Analysis <span id="phase2-state-badge" class="run-badge {'is-running' if phase2_active else ''}">{phase2_state_text}</span></h2>
+        <p class="sub">Keeps search-ready data fresh: OCR, CLIP embeddings, auto-tags, place/search catch-up, and search indexes.</p>
+        <div id="phase2-live-panel" class="{phase2_live_class}">
+          <strong>Progress</strong><br>
+          <span id="phase2-live-detail">{escape(phase2_live_text)}</span>
+        </div>
         <div class="pill-row">
           <span class="pill"><strong>Enabled</strong> <span class="{'status-ok' if semantic['scheduler_enabled'] else 'status-warn'}">{escape(str(semantic['scheduler_enabled']))}</span></span>
+          <span class="pill"><strong>State</strong> <span id="phase2-state-text" class="{phase2_state_class}">{phase2_state_text}</span></span>
           <span class="pill"><strong>Interval</strong> {semantic['scheduler_interval_seconds']}s</span>
           <button type="button" class="pill pill-button" id="phase2-schedule-button" title="Click to cycle auto-run interval: Off → 6h → 12h → 24h"><strong>Auto-run</strong> {phase2_schedule_label}</button>
           <span class="pill"><strong>Face Analysis</strong> <span class="{'status-ok' if semantic['runtime']['face_analysis_enabled'] else 'status-warn'}">{escape(str(semantic['runtime']['face_analysis_enabled']))}</span></span>
           <span class="pill"><strong>Place Precision</strong> {semantic['runtime']['place_tag_precision']}</span>
         </div>
         <div class="list" style="margin-top:14px;">
+          <div class="row"><span>Current job</span><span id="p2-current-job" class="live-status">idle</span></div>
+          <div class="row"><span>Progress</span><span id="p2-progress" class="live-status">—</span></div>
           <div class="row"><span>Last run</span><span id="p2-last-run">{escape(str(scheduler.get('last_semantic_maintenance_at')))}</span></div>
           <div class="row"><span>Next run</span><span id="p2-next-run">{escape(str(scheduler.get('next_semantic_maintenance_at')))}</span></div>
           <div class="row"><span>Eligible photos</span><span id="p2-eligible">{semantic_coverage["eligible_media"]}</span></div>
@@ -647,15 +824,15 @@ async def dashboard(request: Request) -> HTMLResponse:
           <div class="row"><span>Pending</span><span id="p2-pending">{semantic_coverage["remaining_for_search"]} search · {semantic_coverage["remaining_for_clip"]} AI embeddings</span></div>
           <div class="row"><span>Job errors</span><span id="p2-errors">{semantic_coverage["semantic_job_errors"]}</span></div>
         </div>
-        <form class="scan-form" id="phase2-semantic-form">
+        <form class="scan-form" id="phase2-semantic-form" onsubmit="return false">
           <div class="scan-actions">
-            <button type="submit" id="phase2-semantic-button">Run Now</button>
-            <button type="button" id="phase2-cancel-button" style="display:none">Stop</button>
+            <button type="button" id="phase2-semantic-button"{phase2_run_disabled}>Run Now</button>
+            <button type="button" id="phase2-cancel-button" style="{phase2_cancel_display}">Stop</button>
             <label>
               Mode
               <select id="phase2-semantic-mode" name="mode">
-                <option value="maintenance" selected>Incremental (new &amp; changed)</option>
-                <option value="backfill">Full library</option>
+                <option value="maintenance" selected>Catch up pending work</option>
+                <option value="backfill">Deep scan missing AI data</option>
               </select>
             </label>
             <label>
@@ -739,11 +916,12 @@ async def dashboard(request: Request) -> HTMLResponse:
 
       <article class="card full">
         <h2>Source and Storage</h2>
-        <p class="sub">Reads originals from your source folders and writes thumbnails and derived data to a local cache.</p>
+        <p class="sub">Source roots are NAS/original media paths. Derived root and database are local generated/cache storage and should not be used as source roots.</p>
         <div class="list">
-          <div class="row"><span>Source roots</span><span>{'<br>'.join(escape(path) for path in source_roots)}</span></div>
-          <div class="row"><span>Derived root</span><span><code>{escape(payload['storage']['derived_root'])}</code></span></div>
-          <div class="row"><span>Database</span><span><code>{escape(payload['storage']['database_url'])}</code></span></div>
+          <div class="row"><span>Configured source roots</span><span>{'<br>'.join(escape(path) for path in source_roots)}</span></div>
+          <div class="row"><span>Cataloged source roots</span><span>{known_source_roots_html}</span></div>
+          <div class="row"><span>Local derived/cache root</span><span><code>{escape(payload['storage']['derived_root'])}</code></span></div>
+          <div class="row"><span>Local database</span><span><code>{escape(payload['storage']['database_url'])}</code></span></div>
           <div class="row"><span>Recent jobs tracked</span><span>{len(jobs['recent'])}</span></div>
         </div>
       </article>
@@ -794,12 +972,86 @@ async def dashboard(request: Request) -> HTMLResponse:
     let activeLibraryJob = {active_library_job_json};
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     function jobKindLabel(kind) {{
-      if (kind === "scan") return "Photo Library Scan";
-      if (kind === "semantic_backfill" || kind === "semantic_maintenance") return "AI Analysis";
+      if (kind === "scan") return "Phase 1";
+      if (kind === "semantic_backfill" || kind === "semantic_maintenance") return "Phase 2";
       return "Library job";
+    }}
+    function jobWorkLabel(kind) {{
+      if (kind === "scan") return "Library scan";
+      if (kind === "semantic_maintenance") return "Search catch-up";
+      if (kind === "semantic_backfill") return "Missing AI data";
+      return "Library work";
     }}
     function scheduleLabel(hours) {{
       return hours === null || hours === undefined ? "None" : `${{hours}}h`;
+    }}
+    function activeJobId(job) {{
+      return job?.job_id || job?.id || "";
+    }}
+    function compactProgress(job) {{
+      const progress = job?.result?.progress || {{}};
+      if (!job || !["queued", "running"].includes(job.status || "")) return "—";
+      if (job.job_kind === "scan") {{
+        if (progress.processed?.total !== undefined) {{
+          return `${{progress.processed.current ?? 0}} / ${{progress.processed.total}} assets`;
+        }}
+        if (progress.summary?.scanned !== undefined) {{
+          return `${{progress.summary.scanned}} scanned`;
+        }}
+        return progress.stage || job.status || "running";
+      }}
+      const totalDone = progress.total_succeeded ?? progress.succeeded;
+      const totalFailed = progress.total_failed ?? progress.failed;
+      const indexed = progress.total_search_documents_updated ?? progress.search_documents_updated;
+      const chunk = progress.chunk !== undefined ? `chunk ${{progress.chunk}} · ` : "";
+      if (totalDone !== undefined || indexed !== undefined) {{
+        return `${{chunk}}${{totalDone ?? 0}} done · ${{totalFailed ?? 0}} failed · ${{indexed ?? 0}} indexed`;
+      }}
+      if (progress.current !== undefined) {{
+        return `${{chunk}}${{progress.current}} / ${{progress.pending ?? progress.current}}`;
+      }}
+      return progress.stage || progress.message || job.status || "running";
+    }}
+    function detailedProgress(job) {{
+      const progress = job?.result?.progress || {{}};
+      if (!job || !["queued", "running"].includes(job.status || "")) return "IDLE · ready";
+      if (job.job_kind === "scan") {{
+        const processed = progress.processed || {{}};
+        if (processed.total !== undefined) {{
+          return `${{(job.status || "running").toUpperCase()}} · assets ${{processed.current ?? 0}} / ${{processed.total}} · ok ${{processed.succeeded ?? 0}} · failed ${{processed.failed ?? 0}}`;
+        }}
+        const summary = progress.summary || {{}};
+        if (summary.scanned !== undefined) {{
+          return `${{(job.status || "running").toUpperCase()}} · scanned ${{summary.scanned}} · failed ${{summary.failed ?? 0}}`;
+        }}
+        return `${{(job.status || "running").toUpperCase()}} · ${{progress.stage || progress.message || "working"}}`;
+      }}
+      const parts = [(job.status || "running").toUpperCase()];
+      if (progress.chunk !== undefined) parts.push(`chunk ${{progress.chunk}}`);
+      if (progress.pending !== undefined || progress.current !== undefined) {{
+        parts.push(`batch ${{progress.current ?? 0}} / ${{progress.pending ?? progress.current ?? 0}}`);
+      }}
+      parts.push(`done ${{progress.total_succeeded ?? progress.succeeded ?? 0}}`);
+      parts.push(`failed ${{progress.total_failed ?? progress.failed ?? 0}}`);
+      parts.push(`embeddings +${{progress.total_embeddings_created ?? progress.embeddings_created ?? 0}}`);
+      parts.push(`tags +${{progress.total_auto_tag_values ?? progress.auto_tag_values ?? 0}}`);
+      return parts.join(" · ");
+    }}
+    function setPhaseState(phase, state, running) {{
+      const badge = document.getElementById(`${{phase}}-state-badge`);
+      const text = document.getElementById(`${{phase}}-state-text`);
+      const panel = document.getElementById(`${{phase}}-live-panel`);
+      if (badge) {{
+        badge.textContent = state;
+        badge.classList.toggle("is-running", running);
+      }}
+      if (text) {{
+        text.textContent = state;
+        text.className = running ? "status-running" : (state === "WAITING" ? "status-warn" : "status-idle");
+      }}
+      if (panel) {{
+        panel.className = running ? "live-panel is-running" : (state === "WAITING" ? "live-panel is-waiting" : "live-panel");
+      }}
     }}
     function updateLibraryJobGuards() {{
       const active = activeLibraryJob;
@@ -807,20 +1059,35 @@ async def dashboard(request: Request) -> HTMLResponse:
       const phase1OwnsActive = hasActive && active.job_kind === "scan";
       const phase2OwnsActive = hasActive && (active.job_kind === "semantic_backfill" || active.job_kind === "semantic_maintenance");
 
-      if (!scanCard.classList.contains("is-running")) {{
-        scanButton.disabled = phase2OwnsActive;
-      }}
-      if (!semanticCard.classList.contains("is-running")) {{
-        semanticButton.disabled = phase1OwnsActive;
+      scanCard.classList.toggle("is-running", phase1OwnsActive);
+      semanticCard.classList.toggle("is-running", phase2OwnsActive);
+      scanButton.disabled = phase2OwnsActive;
+      semanticButton.disabled = phase1OwnsActive || phase2OwnsActive;
+      semanticCancelButton.style.display = phase2OwnsActive ? "" : "none";
+      setPhaseState("phase1", phase1OwnsActive ? "RUNNING" : (phase2OwnsActive ? "WAITING" : "IDLE"), phase1OwnsActive);
+      setPhaseState("phase2", phase2OwnsActive ? "RUNNING" : (phase1OwnsActive ? "WAITING" : "IDLE"), phase2OwnsActive);
+
+      _setText("p1-current-job", phase1OwnsActive ? `${{jobWorkLabel(active.job_kind)}} · ${{active.status}} · ${{activeJobId(active)}}` : "idle");
+      _setText("p1-progress", phase1OwnsActive ? compactProgress(active) : "—");
+      _setText("p2-current-job", phase2OwnsActive ? `${{jobWorkLabel(active.job_kind)}} · ${{active.status}} · ${{activeJobId(active)}}` : "idle");
+      _setText("p2-progress", phase2OwnsActive ? compactProgress(active) : "—");
+      _setText("phase1-live-detail", phase1OwnsActive ? detailedProgress(active) : (phase2OwnsActive ? "WAITING · Phase 2 is running" : "IDLE · ready"));
+      _setText("phase2-live-detail", phase2OwnsActive ? detailedProgress(active) : (phase1OwnsActive ? "WAITING · Phase 1 is running" : "IDLE · ready"));
+
+      if (phase1OwnsActive) {{
+        scanResult.classList.add("visible");
+        scanResult.textContent = renderScanJob(active);
+      }} else if (phase2OwnsActive) {{
+        scanResult.classList.add("visible");
+        scanResult.textContent = `${{jobKindLabel(active.job_kind)}} is running. Phase 1 waits until it finishes.`;
       }}
 
-      if (phase2OwnsActive && !scanCard.classList.contains("is-running")) {{
-        scanResult.classList.add("visible");
-        scanResult.textContent = `${{jobKindLabel(active.job_kind)}} is running. Photo Library Scan waits until it finishes.`;
-      }}
-      if (phase1OwnsActive && !semanticCard.classList.contains("is-running")) {{
+      if (phase2OwnsActive) {{
         semanticResult.classList.add("visible");
-        semanticResult.textContent = `${{jobKindLabel(active.job_kind)}} is running. AI Analysis waits until it finishes.`;
+        semanticResult.textContent = renderSemanticJob(active);
+      }} else if (phase1OwnsActive) {{
+        semanticResult.classList.add("visible");
+        semanticResult.textContent = `${{jobKindLabel(active.job_kind)}} is running. Phase 2 waits until it finishes.`;
       }}
     }}
     function _setText(id, text) {{
@@ -835,19 +1102,24 @@ async def dashboard(request: Request) -> HTMLResponse:
         activeLibraryJob = payload?.jobs?.active_library_job || null;
         const sched = payload?.scheduler || {{}};
         const cov = payload?.semantic?.coverage || {{}};
+        const perf = payload?.performance || {{}};
         const cat = payload?.catalog || {{}};
         const health = payload?.health || {{}};
 
         if (phase1ScheduleButton) phase1ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(sched.phase1_interval_hours)}}`;
         if (phase2ScheduleButton) phase2ScheduleButton.innerHTML = `<strong>Auto-run</strong> ${{scheduleLabel(sched.phase2_interval_hours)}}`;
 
-        // Hero metrics
-        if (cat.total !== undefined) _setText("m-catalog", cat.total + " items");
-        if (cov.search_current !== undefined) _setText("m-search", cov.search_current + " / " + cov.eligible_media);
-        if (cov.clip_embeddings_current !== undefined) _setText("m-clip", cov.clip_embeddings_current + " / " + cov.eligible_media);
-        if (cov.remaining_for_search !== undefined) _setText("m-pending", cov.remaining_for_search + " search · " + cov.remaining_for_clip + " AI");
-        if (health.missing !== undefined) _setText("m-missing", health.missing);
-        if (health.error !== undefined) _setText("m-errors", health.error);
+        // Impact metrics
+        if (perf.total_media !== undefined) _setText("m-total", perf.total_media + " items");
+        if (perf.search_ready !== undefined) _setText("m-search-ready", perf.search_ready + " / " + perf.eligible_media);
+        if (perf.search_ready_percent !== undefined) _setText("m-search-ready-note", perf.search_ready_percent + "% of searchable media");
+        if (perf.generated_tags !== undefined) _setText("m-tags", perf.generated_tags);
+        if (perf.tagged_media !== undefined) _setText("m-tags-note", perf.tagged_media + " media with tags");
+        if (perf.place_tagged_media !== undefined) _setText("m-places", perf.place_tagged_media);
+        if (perf.faces_detected !== undefined) _setText("m-people", perf.faces_detected);
+        if (perf.people_media !== undefined) _setText("m-people-note", perf.people_media + " media with faces");
+        if (perf.clip_embeddings !== undefined) _setText("m-ai", perf.clip_embeddings + " / " + perf.eligible_media);
+        if (perf.clip_coverage_percent !== undefined) _setText("m-ai-note", perf.clip_coverage_percent + "% embedded · " + perf.remaining_clip + " left");
 
         // Phase 1 card rows
         if (sched.last_poll_at !== undefined) _setText("p1-last-poll", sched.last_poll_at ?? "—");
@@ -913,7 +1185,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       ];
       if (job?.status === "queued" || job?.status === "running") {{
         if (progress.message) lines.push(progress.message);
-        lines.push(`job: ${{job?.job_id || ""}}`);
+        lines.push(`job: ${{job?.job_id || job?.id || ""}}`);
         if (progress.stage) lines.push(`stage: ${{progress.stage}}`);
         if (progress.summary?.scanned !== undefined) lines.push(`scanned: ${{progress.summary.scanned}}`);
         if (progress.processed?.total !== undefined) {{
@@ -1008,7 +1280,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       ];
       if (job?.status === "queued" || job?.status === "running") {{
         if (progress.message) lines.push(progress.message);
-        lines.push(`job: ${{job?.job_id || ""}}`);
+        lines.push(`job: ${{job?.job_id || job?.id || ""}}`);
         if (progress.mode) lines.push(`mode: ${{progress.mode}}`);
         if (progress.full_run) lines.push(`scope: full library`);
         if (progress.chunk !== undefined) lines.push(`chunk: ${{progress.chunk}}`);
@@ -1066,11 +1338,12 @@ async def dashboard(request: Request) -> HTMLResponse:
     sourceRootsField?.addEventListener("input", () => {{
       rememberText(phase1SourceRootsStorageKey, sourceRootsField.value);
     }});
-    scanForm?.addEventListener("submit", async (event) => {{
-      event.preventDefault();
+    scanForm?.addEventListener("submit", (event) => event.preventDefault());
+    semanticForm?.addEventListener("submit", (event) => event.preventDefault());
+    scanButton?.addEventListener("click", async () => {{
       if (activeLibraryJob && ["queued", "running"].includes(activeLibraryJob.status || "") && activeLibraryJob.job_kind !== "scan") {{
         scanResult.classList.add("visible");
-        scanResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is running. Photo Library Scan waits until it finishes.`;
+        scanResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is running. Phase 1 waits until it finishes.`;
         return;
       }}
       scanResult.classList.add("visible");
@@ -1103,11 +1376,10 @@ async def dashboard(request: Request) -> HTMLResponse:
         refreshDashboardStatus();
       }}
     }});
-    semanticForm?.addEventListener("submit", async (event) => {{
-      event.preventDefault();
+    semanticButton?.addEventListener("click", async () => {{
       if (activeLibraryJob && ["queued", "running"].includes(activeLibraryJob.status || "") && activeLibraryJob.job_kind !== "semantic_backfill" && activeLibraryJob.job_kind !== "semantic_maintenance") {{
         semanticResult.classList.add("visible");
-        semanticResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is running. AI Analysis waits until it finishes.`;
+        semanticResult.textContent = `${{jobKindLabel(activeLibraryJob.job_kind)}} is running. Phase 2 waits until it finishes.`;
         return;
       }}
       semanticResult.classList.add("visible");
@@ -1143,7 +1415,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       }}
     }});
     semanticCancelButton?.addEventListener("click", async () => {{
-      const jobId = loadRememberedJob(phase2StorageKey);
+      const jobId = loadRememberedJob(phase2StorageKey) || activeLibraryJob?.job_id || activeLibraryJob?.id || "";
       if (!jobId) return;
       semanticCancelButton.disabled = true;
       try {{
@@ -1411,6 +1683,31 @@ async def status(request: Request) -> dict[str, Any]:
         recent_jobs = session.execute(
             select(ProcessingJob).order_by(ProcessingJob.updated_at.desc(), ProcessingJob.enqueued_at.desc()).limit(10)
         ).scalars().all()
+        total_tags = int(session.scalar(select(func.count()).select_from(Tag)) or 0)
+        tagged_media_count = int(session.scalar(select(func.count(func.distinct(Tag.file_id)))) or 0)
+        place_tagged_media_count = int(
+            session.scalar(
+                select(func.count(func.distinct(Tag.file_id))).where(
+                    Tag.tag_type.in_(("place", "place_detail", "location", "geo", "auto_scene"))
+                )
+            )
+            or 0
+        )
+        faces_detected = int(session.scalar(select(func.count()).select_from(Face)) or 0)
+        people_media_count = int(session.scalar(select(func.count(func.distinct(Face.file_id)))) or 0)
+        search_ready_percent = round((search_documents_current / eligible_media_count) * 100, 1) if eligible_media_count else 0
+        clip_coverage_percent = round((clip_embeddings_current / eligible_media_count) * 100, 1) if eligible_media_count else 0
+        known_source_roots = [
+            str(row[0])
+            for row in session.execute(
+                select(MediaFile.source_root)
+                .where(MediaFile.source_root.is_not(None))
+                .distinct()
+                .order_by(MediaFile.source_root.asc())
+                .limit(20)
+            ).all()
+            if row[0]
+        ]
 
         return {
             "app": {
@@ -1421,9 +1718,24 @@ async def status(request: Request) -> dict[str, Any]:
                 "data_root": str(settings.data_root),
                 "derived_root": str(settings.derived_root),
                 "source_roots": [str(path) for path in settings.source_roots],
+                "known_source_roots": known_source_roots,
                 "database_url": settings.database_url,
             },
             "security": _security_snapshot(settings),
+            "performance": {
+                "total_media": pipeline_snapshot["media"]["total"],
+                "eligible_media": eligible_media_count,
+                "search_ready": search_documents_current,
+                "search_ready_percent": search_ready_percent,
+                "generated_tags": total_tags,
+                "tagged_media": tagged_media_count,
+                "place_tagged_media": place_tagged_media_count,
+                "faces_detected": faces_detected,
+                "people_media": people_media_count,
+                "clip_embeddings": clip_embeddings_current,
+                "clip_coverage_percent": clip_coverage_percent,
+                "remaining_clip": max(0, eligible_media_count - clip_embeddings_current),
+            },
             "catalog": pipeline_snapshot["media"],
             "jobs": {
                 **pipeline_snapshot["jobs"],
@@ -1460,6 +1772,7 @@ async def status(request: Request) -> dict[str, Any]:
                 },
                 "runtime": {
                     "face_analysis_enabled": settings.face_analysis_enabled,
+                    "geocoding_enabled": settings.geocoding_enabled and not settings.offline_mode,
                     "place_tag_precision": settings.place_tag_precision,
                 },
                 "search_documents": {

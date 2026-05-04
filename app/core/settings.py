@@ -89,6 +89,7 @@ class AppSettings:
     face_detection_score_threshold: float
     face_match_threshold: float
     place_tag_precision: int
+    geocoding_enabled: bool
     semantic_place_version: str
     semantic_person_version: str
     semantic_ocr_version: str
@@ -137,6 +138,8 @@ def load_settings() -> AppSettings:
     derived_root = Path(_env("PHOTOMINE_DERIVED_ROOT", "./derived_root")).expanduser().resolve()
     database_path = Path(_env("PHOTOMINE_DATABASE_PATH", str(data_root / "photome.sqlite3"))).expanduser().resolve()
     database_url = _env("PHOTOMINE_DATABASE_URL", f"sqlite:///{database_path}")
+    offline_mode = _env_bool("PHOTOMINE_OFFLINE_MODE", False)
+    geocoding_enabled = _env_bool("PHOTOMINE_GEOCODING_ENABLED", not offline_mode)
 
     return AppSettings(
         app_name=_env("PHOTOMINE_APP_NAME", "photome"),
@@ -145,7 +148,7 @@ def load_settings() -> AppSettings:
         server_port=_env_int("PHOTOMINE_SERVER_PORT", 8000),
         log_level=_env("PHOTOMINE_LOG_LEVEL", "INFO").upper(),
         reload=_env_bool("PHOTOMINE_RELOAD", False),
-        offline_mode=_env_bool("PHOTOMINE_OFFLINE_MODE", False),
+        offline_mode=offline_mode,
         data_root=data_root,
         source_roots=source_roots,
         derived_root=derived_root,
@@ -169,11 +172,12 @@ def load_settings() -> AppSettings:
         face_detection_score_threshold=_env_float("PHOTOMINE_FACE_DETECTION_SCORE_THRESHOLD", 0.8),
         face_match_threshold=_env_float("PHOTOMINE_FACE_MATCH_THRESHOLD", 0.363),
         place_tag_precision=_env_int("PHOTOMINE_PLACE_TAG_PRECISION", 3),
-        semantic_place_version=_env("PHOTOMINE_SEMANTIC_PLACE_VERSION", "place-v1"),
+        geocoding_enabled=geocoding_enabled,
+        semantic_place_version=_env("PHOTOMINE_SEMANTIC_PLACE_VERSION", "place-v2"),
         semantic_person_version=_env("PHOTOMINE_SEMANTIC_PERSON_VERSION", "person-v1"),
         semantic_ocr_version=_env("PHOTOMINE_SEMANTIC_OCR_VERSION", "ocr-v1"),
         semantic_caption_version=_env("PHOTOMINE_SEMANTIC_CAPTION_VERSION", "caption-v1"),
         semantic_embedding_version=_env("PHOTOMINE_SEMANTIC_EMBEDDING_VERSION", "embedding-v1"),
-        semantic_auto_tag_version=_env("PHOTOMINE_SEMANTIC_AUTO_TAG_VERSION", "auto-v2"),
-        semantic_search_version=_env("PHOTOMINE_SEMANTIC_SEARCH_VERSION", "search-v2"),
+        semantic_auto_tag_version=_env("PHOTOMINE_SEMANTIC_AUTO_TAG_VERSION", "auto-v3"),
+        semantic_search_version=_env("PHOTOMINE_SEMANTIC_SEARCH_VERSION", "search-v3"),
     )

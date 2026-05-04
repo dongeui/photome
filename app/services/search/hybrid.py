@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from typing import Protocol
 
+from app.services.analysis.clip_lexicon import load_concept_aliases
 from app.services.search.planner import QueryPlan, plan_query
 from app.services.search.seed import seed_list
 
@@ -105,7 +106,7 @@ CELEBRATION_HINTS: frozenset[str] = frozenset(seed_list("celebration_hints"))
 
 
 class HybridSearchBackend(Protocol):
-    def search_by_ocr(self, query: str, *, limit: int) -> list[dict]: ...
+    def search_by_ocr(self, query: str, *, limit: int, plan: QueryPlan | None = None) -> list[dict]: ...
 
     def search_by_embedding(
         self,
@@ -115,9 +116,10 @@ class HybridSearchBackend(Protocol):
         place_filter: str | None = None,
         date_from: object | None = None,
         date_to: object | None = None,
+        plan: QueryPlan | None = None,
     ) -> list[dict]: ...
 
-    def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]: ...
+    def search_by_shadow_doc(self, query: str, *, limit: int, plan: QueryPlan | None = None) -> list[dict]: ...
 
     def encode_text(self, query: str) -> bytes: ...
 
@@ -219,6 +221,7 @@ class HybridSearchService:
         ):
             return [], {"effective_mode": mode, "intent_reason": "degenerate"}
         normalized_mode = mode if mode in {"hybrid", "ocr", "semantic"} else "hybrid"
+        candidate_limit = _candidate_limit(limit, plan)
 
         # Auto-extract date range from natural language when caller didn't specify one
         if use_planner_dates and date_from is None and date_to is None and plan.date_from is not None:
@@ -228,7 +231,11 @@ class HybridSearchService:
         keyword_query = plan.keyword_query or cleaned
 
         # OCR must run first — its results drive effective_mode resolution
-        ocr_results = self._backend.search_by_ocr(keyword_query, limit=limit) if normalized_mode in {"hybrid", "ocr"} else []
+        ocr_results = (
+            self._search_ocr_channel(keyword_query, limit=candidate_limit, plan=plan)
+            if normalized_mode in {"hybrid", "ocr"}
+            else []
+        )
         effective_mode, intent_reason = resolve_effective_mode(
             cleaned, normalized_mode, ocr_results, planner_intent=plan.intent, tag_vocab=tag_vocab
         )
@@ -249,20 +256,20 @@ class HybridSearchService:
 
         if need_shadow and need_clip and supports_parallel:
             with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_shadow = pool.submit(self._backend.search_by_shadow_doc, keyword_query, limit=limit)
-                fut_clip = pool.submit(self._search_clip_variants, plan, limit, place_filter, date_from, date_to)
+                fut_shadow = pool.submit(self._search_shadow_channel, keyword_query, limit=candidate_limit, plan=plan)
+                fut_clip = pool.submit(self._search_clip_variants, plan, candidate_limit, place_filter, date_from, date_to)
                 shadow_results = fut_shadow.result()
                 clip_results = fut_clip.result()
         elif need_shadow and need_clip:
-            shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
-            clip_results = self._search_clip_variants(plan, limit, place_filter, date_from, date_to)
+            shadow_results = self._search_shadow_channel(keyword_query, limit=candidate_limit, plan=plan)
+            clip_results = self._search_clip_variants(plan, candidate_limit, place_filter, date_from, date_to)
         elif need_shadow:
-            shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
+            shadow_results = self._search_shadow_channel(keyword_query, limit=candidate_limit, plan=plan)
         elif need_clip:
-            clip_results = self._search_clip_variants(plan, limit, place_filter, date_from, date_to)
+            clip_results = self._search_clip_variants(plan, candidate_limit, place_filter, date_from, date_to)
 
         if effective_mode == "semantic" and not clip_results:
-            shadow_results = self._backend.search_by_shadow_doc(keyword_query, limit=limit)
+            shadow_results = self._search_shadow_channel(keyword_query, limit=candidate_limit, plan=plan)
 
         # Persisted DB weights take precedence over built-in defaults,
         # but explicit per-request overrides take the highest priority
@@ -304,6 +311,7 @@ class HybridSearchService:
             merged = [r for r in merged if str(r.get("file_id", "")) not in hidden_ids]
 
         debug_candidates = [dict(item) for item in merged] if debug else None
+        merged = apply_hard_filters(merged, plan)
         apply_exact_ocr_boost(cleaned, merged)
         apply_exact_tag_boost(merged)
         apply_context_filter_boost(merged, plan)
@@ -324,7 +332,7 @@ class HybridSearchService:
         }
 
         # Zero-result fallback 1: loosen date filter and retry once
-        if allow_date_fallback and not final and (plan.date_from is not None) and not debug:
+        if allow_date_fallback and not final and (plan.date_from is not None) and not plan.require_date_match and not debug:
             loosened = self._loosened_date_fallback(
                 query=query,
                 limit=limit,
@@ -358,6 +366,7 @@ class HybridSearchService:
             not final
             and not debug
             and allow_condition_fallback
+            and not plan.has_non_relaxable_filters()
             and (plan.place_terms or plan.person_terms)
         ):
             relaxed, relaxed_label = self._loosened_condition_fallback(
@@ -379,6 +388,14 @@ class HybridSearchService:
                     "place_filter": place_filter,
                     "date_from": _isoformat_or_none(date_from),
                     "date_to": _isoformat_or_none(date_to),
+                    "face_count_min": plan.face_count_min,
+                    "face_count_max": plan.face_count_max,
+                    "face_count_exact": plan.face_count_exact,
+                    "person_exclusive": plan.person_exclusive,
+                    "require_place_match": plan.require_place_match,
+                    "excluded_terms": plan.excluded_terms or [],
+                    "daypart": plan.daypart,
+                    "allowed_weekdays": plan.allowed_weekdays or [],
                     "planner_place_terms": plan.place_terms,
                     "planner_person_terms": plan.person_terms,
                     "planner_ocr_terms": plan.ocr_terms,
@@ -423,6 +440,52 @@ class HybridSearchService:
             len(ocr_results), len(clip_results), len(shadow_results), len(final),
         )
         return final, meta
+
+    def _search_ocr_channel(self, query: str, *, limit: int, plan: QueryPlan) -> list[dict]:
+        try:
+            return self._backend.search_by_ocr(query, limit=limit, plan=plan)
+        except TypeError as exc:
+            if "plan" not in str(exc):
+                raise
+            return self._backend.search_by_ocr(query, limit=limit)
+
+    def _search_shadow_channel(self, query: str, *, limit: int, plan: QueryPlan) -> list[dict]:
+        try:
+            return self._backend.search_by_shadow_doc(query, limit=limit, plan=plan)
+        except TypeError as exc:
+            if "plan" not in str(exc):
+                raise
+            return self._backend.search_by_shadow_doc(query, limit=limit)
+
+    def _search_embedding_channel(
+        self,
+        query_embedding: bytes,
+        *,
+        limit: int,
+        place_filter: str | None = None,
+        date_from: object | None = None,
+        date_to: object | None = None,
+        plan: QueryPlan,
+    ) -> list[dict]:
+        try:
+            return self._backend.search_by_embedding(
+                query_embedding,
+                limit=limit,
+                place_filter=place_filter,
+                date_from=date_from,
+                date_to=date_to,
+                plan=plan,
+            )
+        except TypeError as exc:
+            if "plan" not in str(exc):
+                raise
+            return self._backend.search_by_embedding(
+                query_embedding,
+                limit=limit,
+                place_filter=place_filter,
+                date_from=date_from,
+                date_to=date_to,
+            )
 
     def _log_search_event(
         self,
@@ -545,12 +608,13 @@ class HybridSearchService:
                 # selectivity), then filter by tag values in Python.
                 # This avoids N FAISS searches + N _batch_load_supplements calls.
                 pf_set = {pf.casefold() for pf in effective_place_filters}
-                raw = self._backend.search_by_embedding(
+                raw = self._search_embedding_channel(
                     query_bytes,
                     limit=limit * len(effective_place_filters) * 4,
                     place_filter=None,
                     date_from=date_from,
                     date_to=date_to,
+                    plan=plan,
                 )
                 rank = 0
                 for result in raw:
@@ -567,12 +631,13 @@ class HybridSearchService:
                         result["semantic_variant_rank"] = rank
                         merged[file_id] = result
             else:
-                results = self._backend.search_by_embedding(
+                results = self._search_embedding_channel(
                     query_bytes,
                     limit=limit,
                     place_filter=effective_place_filters[0],
                     date_from=date_from,
                     date_to=date_to,
+                    plan=plan,
                 )
                 for rank, result in enumerate(results, start=1):
                     file_id = str(result["file_id"])
@@ -768,6 +833,175 @@ def combined_match_reason(hits: set[str]) -> str:
     if "shadow" in hits:
         return "shadow"
     return "analysis"
+
+
+def _candidate_limit(limit: int, plan: "QueryPlan") -> int:
+    if plan.has_hard_filters():
+        return max(limit * 4, limit + 20)
+    return limit
+
+
+def apply_hard_filters(results: list[dict], plan: "QueryPlan") -> list[dict]:
+    if not plan.has_hard_filters():
+        return results
+    filtered: list[dict] = []
+    for result in results:
+        if (
+            _matches_face_count(result, plan)
+            and _matches_date_range(result, plan)
+            and _matches_time_constraints(result, plan)
+            and _matches_place_terms(result, plan)
+            and _matches_person_terms(result, plan)
+            and _matches_excluded_terms(result, plan)
+        ):
+            filtered.append(result)
+    return filtered
+
+
+def _matches_face_count(result: dict, plan: "QueryPlan") -> bool:
+    count = int(result.get("face_count") or 0)
+    if plan.face_count_exact is not None and count != plan.face_count_exact:
+        return False
+    if plan.face_count_min is not None and count < plan.face_count_min:
+        return False
+    if plan.face_count_max is not None and count > plan.face_count_max:
+        return False
+    return True
+
+
+def _matches_date_range(result: dict, plan: "QueryPlan") -> bool:
+    if not plan.require_date_match or plan.date_from is None:
+        return True
+    captured = result.get("captured_at")
+    if captured is None:
+        return False
+    try:
+        from datetime import datetime as _dt
+
+        captured_dt = _dt.fromisoformat(captured) if isinstance(captured, str) else captured
+        date_from = _dt.combine(plan.date_from, time.min)
+        date_to = _dt.combine(plan.date_to, time.max) if plan.date_to else None
+        return captured_dt >= date_from and (date_to is None or captured_dt <= date_to)
+    except Exception:
+        return False
+
+
+def _matches_place_terms(result: dict, plan: "QueryPlan") -> bool:
+    if not plan.require_place_match or not plan.place_terms:
+        return True
+    place_set = {term.casefold() for term in plan.place_terms}
+    tag_values = {str(tag.get("value", "")).casefold() for tag in (result.get("tags") or [])}
+    return bool(place_set & tag_values)
+
+
+_DAYPART_HOURS: dict[str, tuple[int, int]] = {
+    "dawn": (4, 7),
+    "morning": (5, 11),
+    "noon": (11, 14),
+    "afternoon": (12, 17),
+    "evening": (17, 21),
+    "night": (21, 24),
+}
+
+_GENERIC_ABSENT_PERSON_TERMS = {"face", "faces", "person", "people", "human", "얼굴", "사람", "인물"}
+
+
+def _matches_time_constraints(result: dict, plan: "QueryPlan") -> bool:
+    if plan.daypart is None and not plan.allowed_weekdays:
+        return True
+    captured = result.get("captured_at")
+    if captured is None:
+        return False
+    try:
+        from datetime import datetime as _dt
+
+        captured_dt = _dt.fromisoformat(captured) if isinstance(captured, str) else captured
+    except Exception:
+        return False
+
+    if plan.allowed_weekdays and captured_dt.weekday() not in set(plan.allowed_weekdays):
+        return False
+
+    if plan.daypart is not None:
+        hour = captured_dt.hour
+        start, end = _DAYPART_HOURS.get(plan.daypart, (0, 24))
+        if plan.daypart == "night":
+            if hour < start and hour >= 4:
+                return False
+        elif hour < start or hour >= end:
+            return False
+
+    return True
+
+
+def _matches_person_terms(result: dict, plan: "QueryPlan") -> bool:
+    if not plan.requires_person_match():
+        return True
+    allowed_terms = _expanded_person_terms(plan.person_terms)
+    result_person_terms = {
+        str(tag.get("value", "")).casefold()
+        for tag in (result.get("tags") or [])
+        if tag.get("type") in {"person", "people", "face", "auto_person"}
+    }
+    if not (allowed_terms & result_person_terms):
+        return False
+    if not plan.person_exclusive:
+        return True
+    informative_auto_terms = {
+        str(tag.get("value", "")).casefold()
+        for tag in (result.get("tags") or [])
+        if tag.get("type") == "auto_person"
+    } - _generic_auto_person_terms()
+    if informative_auto_terms and not informative_auto_terms.issubset(allowed_terms):
+        return False
+    return True
+
+
+def _matches_excluded_terms(result: dict, plan: "QueryPlan") -> bool:
+    excluded_terms = {term.casefold() for term in (plan.excluded_terms or []) if term}
+    if not excluded_terms:
+        return True
+    tag_values = {str(tag.get("value", "")).casefold() for tag in (result.get("tags") or [])}
+    ocr_text = str(result.get("ocr_text") or "").casefold()
+    expanded_excluded = _expanded_filter_terms(excluded_terms)
+
+    if expanded_excluded & _GENERIC_ABSENT_PERSON_TERMS:
+        if int(result.get("face_count") or 0) > 0:
+            return False
+        expanded_excluded -= _GENERIC_ABSENT_PERSON_TERMS
+
+    if expanded_excluded & tag_values:
+        return False
+
+    return not any(term and len(term) >= 2 and term in ocr_text for term in expanded_excluded)
+
+
+def _expanded_person_terms(person_terms: list[str]) -> set[str]:
+    lowered_terms = {term.casefold() for term in person_terms if term}
+    expanded = set(lowered_terms)
+    for canonical, aliases in load_concept_aliases().items():
+        cluster = {canonical.casefold(), *[alias.casefold() for alias in aliases]}
+        if cluster & lowered_terms:
+            expanded |= cluster
+    return expanded
+
+
+def _generic_auto_person_terms() -> set[str]:
+    aliases = load_concept_aliases()
+    generic: set[str] = {"face", "faces", "portrait", "selfie", "human", "people", "person", "group"}
+    for canonical in ("person", "group"):
+        generic.add(canonical.casefold())
+        generic.update(alias.casefold() for alias in aliases.get(canonical, ()))
+    return generic
+
+
+def _expanded_filter_terms(terms: set[str]) -> set[str]:
+    expanded = set(terms)
+    for canonical, aliases in load_concept_aliases().items():
+        cluster = {canonical.casefold(), *[alias.casefold() for alias in aliases]}
+        if cluster & terms:
+            expanded |= cluster
+    return expanded
 
 
 def apply_date_soft_scoring(results: list[dict], plan: "QueryPlan") -> None:

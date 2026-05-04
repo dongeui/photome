@@ -214,6 +214,33 @@ visual_terms:
   - 돌잔치
   - 환갑
   - 칠순
+  - 실내
+  - 야외
+  - 거실
+  - 주방
+  - 침실
+  - 사무실
+  - 교실
+  - 무대
+  - 책
+  - 공부
+  - 요리
+  - 식사
+  - 독서
+  - 비
+  - 눈
+  - 맑은
+  - 흐린
+  - 벚꽃
+  - 단풍
+  - 산책
+  - 조깅
+  - 러닝
+  - 자전거
+  - 공연
+  - 전시
+  - 쇼핑
+  - 운전
 
 place_aliases:
   제주도: 제주
@@ -310,6 +337,18 @@ lexicon:
   카페: cafe coffee shop interior cozy
   식당: restaurant food dining
   집: home house indoor interior
+  실내: indoor interior room inside
+  야외: outdoor open air outside nature
+  거실: living room home interior indoor
+  주방: kitchen cooking indoor home
+  침실: bedroom bed indoor home
+  사무실: office desk workplace indoor
+  교실: classroom school desk indoor
+  무대: stage concert performance indoor
+  책: book reading study indoor
+  공부: study learning classroom desk
+  요리: cooking kitchen meal food
+  식사: meal dining table food
   학교: school classroom building
   공항: airport travel terminal
   해외: abroad overseas travel landmark
@@ -336,6 +375,12 @@ lexicon:
   여름: summer beach outdoor sunny hot
   가을: autumn fall foliage orange leaves
   겨울: winter snow cold ice
+  비: rain wet weather umbrella
+  눈: snow winter white cold
+  맑은: clear sunny blue sky
+  흐린: cloudy overcast gray sky
+  벚꽃: cherry blossom spring flowers pink
+  단풍: autumn foliage fall leaves orange
   귀여운: cute adorable
   웃는: smiling happy laughing
   잠자는: sleeping resting
@@ -424,8 +469,22 @@ english_expansions:
   friends: friends group people smiling
   sunset: sunset dusk evening orange sky
   sunrise: sunrise dawn morning sky
+  indoor: indoor interior room home office
+  office: office desk workplace indoor
+  classroom: classroom school desk indoor
+  kitchen: kitchen cooking indoor food
+  bedroom: bedroom bed indoor home
+  livingroom: living room home interior
+  reading: reading book study indoor
+  study: study learning classroom desk
+  cooking: cooking kitchen meal food
   snow: snow winter cold white
   rain: rain wet weather outdoor
+  cloudy: cloudy overcast gray sky
+  clear: clear sunny blue sky
+  blossom: cherry blossom flowers spring
+  concert: concert performance stage live
+  exhibition: exhibition gallery museum indoor
   flower: flower floral bloom garden
   sky: sky clouds blue outdoor
 
@@ -449,6 +508,19 @@ clip_templates:
   산: mountain hiking outdoor scenic
   공원: outdoor park green nature
   카페: cozy cafe coffee shop interior
+  실내: an indoor room interior
+  야외: an outdoor open air scene
+  거실: a living room at home
+  주방: a kitchen with cooking
+  침실: a bedroom indoors
+  사무실: an office desk workspace
+  교실: a classroom at school
+  무대: a concert or performance stage
+  책: a book for reading study
+  독서: a person reading a book indoors
+  공부: studying at a desk classroom
+  요리: cooking food in a kitchen
+  식사: a meal on a dining table
   생일: birthday cake celebration party
   결혼식: wedding ceremony formal couple
   졸업식: graduation ceremony academic
@@ -460,6 +532,10 @@ clip_templates:
   가을: autumn fall foliage leaves
   야경: city lights night cityscape
   일몰: sunset dusk orange sky
+  비: rainy weather outdoors
+  눈: snowy winter scenery
+  벚꽃: cherry blossom flowers in spring
+  단풍: autumn leaves foliage
   음식: food meal restaurant table
   강아지: cute dog puppy pet
   고양이: cute cat kitten pet

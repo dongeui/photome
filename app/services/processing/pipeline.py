@@ -509,6 +509,7 @@ class ProcessingPipeline:
                         if media_file is None:
                             failed += 1
                             continue
+                        self._refresh_place_tags(session, media_file, catalog)
                         if self._semantic_clip_enabled:
                             embedding_result = self._ensure_clip_embedding(session, media_file, catalog, semantic_catalog)
                             if embedding_result and embedding_result.get("_created"):
@@ -1075,6 +1076,7 @@ class ProcessingPipeline:
                 "_created": False,
             }
 
+        self._ensure_clip_source_asset(media_file, catalog)
         embedding_result = self._materialize_clip_embedding(media_file)
         if embedding_result is None:
             return None
@@ -1090,6 +1092,54 @@ class ProcessingPipeline:
         )
         embedding_result["_created"] = True
         return embedding_result
+
+    def _ensure_clip_source_asset(self, media_file: MediaFile, catalog: MediaCatalog) -> None:
+        if media_file.media_kind != MediaKind.VIDEO.value:
+            return
+
+        thumbnail_path = self._derived_root / self._clip_source_thumbnail_relative_path(media_file.file_id)
+        if thumbnail_path.is_file():
+            return
+
+        try:
+            location = self._thumbnail_service.generate(
+                Path(media_file.current_path),
+                media_file.file_id,
+                MediaKind.VIDEO,
+            )
+        except Exception as exc:
+            logger.warning(
+                "video thumbnail unavailable for clip embedding",
+                extra={"file_id": media_file.file_id, "path": media_file.current_path, "reason": str(exc)},
+            )
+            return
+
+        catalog.register_derived_asset(media_file.file_id, location.kind, location.relative_path)
+
+    def _refresh_place_tags(
+        self,
+        session: Session,
+        media_file: MediaFile,
+        catalog: MediaCatalog | None = None,
+    ) -> list[MediaTagInput]:
+        materialized_tags = self._materialize_place_tags(media_file, session=session)
+        if not materialized_tags:
+            return []
+
+        existing_place_tags = [
+            MediaTagInput(tag_type=tag.tag_type, tag_value=tag.tag_value)
+            for tag in media_file.tags
+            if tag.tag_type in PLACE_TAG_TYPES
+        ]
+        if _tag_identity_set(existing_place_tags) == _tag_identity_set(materialized_tags):
+            return existing_place_tags
+
+        (catalog or MediaCatalog(session)).replace_tags_for_types(
+            media_file.file_id,
+            list(PLACE_TAG_TYPES),
+            materialized_tags,
+        )
+        return materialized_tags
 
     def _refresh_auto_tags_from_existing_embedding(self, session: Session, media_file: MediaFile) -> list[MediaTagInput]:
         """Rebuild Phase 2 auto-tags from persisted CLIP vectors when available."""
@@ -1152,23 +1202,36 @@ class ProcessingPipeline:
         return Path(media_file.current_path)
 
     def _materialize_clip_embedding(self, media_file: MediaFile) -> dict[str, Any] | None:
-        """CLIP policy A: ``current_path`` (NAS/source) first; derived thumbnail only on failure.
+        """CLIP policy A: source image first; videos use derived thumbnails.
 
         Does not require copying full originals to derived disk. See RUNBOOK «CLIP embedding source policy».
         """
         try:
             clip_embedding.ensure_models()
-            payload = clip_embedding.encode_image(media_file.current_path)
         except Exception as exc:
-            fallback_path = self._derived_root / self._clip_source_thumbnail_relative_path(media_file.file_id)
+            logger.warning(
+                "clip embedding skipped",
+                extra={"file_id": media_file.file_id, "path": media_file.current_path, "reason": str(exc)},
+            )
+            return None
+
+        last_error: Exception | None = None
+        for source_path in self._clip_embedding_source_paths(media_file):
             try:
-                payload = clip_embedding.encode_image(str(fallback_path))
-            except Exception:
-                logger.warning(
-                    "clip embedding skipped",
-                    extra={"file_id": media_file.file_id, "path": media_file.current_path, "reason": str(exc)},
-                )
-                return None
+                payload = clip_embedding.encode_image(str(source_path))
+                break
+            except Exception as exc:
+                last_error = exc
+        else:
+            logger.warning(
+                "clip embedding skipped",
+                extra={
+                    "file_id": media_file.file_id,
+                    "path": media_file.current_path,
+                    "reason": str(last_error) if last_error is not None else "no clip source",
+                },
+            )
+            return None
 
         vector = clip_embedding.embedding_from_bytes(payload)
         relative_path = self._clip_embedding_relative_path(media_file.file_id)
@@ -1193,6 +1256,16 @@ class ProcessingPipeline:
             "dimensions": int(vector.size),
             "checksum": None,
         }
+
+    def _clip_embedding_source_paths(self, media_file: MediaFile) -> list[Path]:
+        thumbnail_path = self._derived_root / self._clip_source_thumbnail_relative_path(media_file.file_id)
+        if media_file.media_kind == MediaKind.VIDEO.value:
+            return [thumbnail_path]
+
+        paths = [Path(media_file.current_path)]
+        if thumbnail_path.is_file():
+            paths.append(thumbnail_path)
+        return paths
 
     def _clip_model_identifier(self) -> str:
         config = clip_embedding.model_config()
@@ -1568,6 +1641,14 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _tag_identity_set(tags: list[MediaTagInput]) -> set[tuple[str, str]]:
+    return {
+        (tag.tag_type.strip().lower(), tag.tag_value.strip().casefold())
+        for tag in tags
+        if tag.tag_type.strip() and tag.tag_value.strip()
+    }
 
 
 def _coerce_source_roots(value: Any) -> tuple[Path, ...] | None:
