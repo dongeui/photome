@@ -194,6 +194,26 @@ def test_golden_visual_query_uses_clip_and_shadow_channels() -> None:
     assert results[0]["match_reason"] == "clip+shadow"
 
 
+def test_clear_visual_query_skips_ocr_channel() -> None:
+    class CountingVisualBackend(GoldenChannelBackend):
+        def __init__(self) -> None:
+            self.ocr_calls = 0
+
+        def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
+            self.ocr_calls += 1
+            return []
+
+    backend = CountingVisualBackend()
+    service = HybridSearchService(backend)
+
+    results, meta = service.search_with_meta("바다 여행", limit=5, mode="hybrid", debug=True)
+
+    assert backend.ocr_calls == 0
+    assert meta["effective_mode"] == "semantic"
+    assert meta["debug"]["channel_stats"]["ocr"] == 0
+    assert results[0]["file_id"] == "beach-trip"
+
+
 def test_golden_ocr_query_skips_clip_channel() -> None:
     service = HybridSearchService(GoldenChannelBackend())
 

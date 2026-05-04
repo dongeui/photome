@@ -230,10 +230,14 @@ class HybridSearchService:
 
         keyword_query = plan.keyword_query or cleaned
 
-        # OCR must run first — its results drive effective_mode resolution
+        # OCR drives mode resolution for ambiguous/text queries. Clear visual
+        # queries skip it to avoid slow, noisy text matches dominating photos.
+        should_run_ocr = normalized_mode in {"hybrid", "ocr"} and not (
+            normalized_mode == "hybrid" and plan.intent == "visual" and not plan.ocr_terms
+        )
         ocr_results = (
             self._search_ocr_channel(keyword_query, limit=candidate_limit, plan=plan)
-            if normalized_mode in {"hybrid", "ocr"}
+            if should_run_ocr
             else []
         )
         effective_mode, intent_reason = resolve_effective_mode(
