@@ -30,6 +30,9 @@ PLACE_TAG_TYPES = ("place", "location")
 PAGE_SIZE = 48
 GALLERY_SEARCH_LIMIT = 500
 QUICK_SEARCH_TERMS = ("얼굴", "아기", "여자", "영수증", "화면", "baby", "receipt")
+SORT_NEWEST = "newest"
+SORT_OLDEST = "oldest"
+SORT_OPTIONS = (SORT_NEWEST, SORT_OLDEST)
 
 _INTENT_REASON_LABELS: dict[str, str] = {
     "fallback": "스마트 검색",
@@ -69,6 +72,7 @@ async def home_page(
     person: Optional[str] = Query(default=None),
     place: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
+    sort: str = Query(default=SORT_NEWEST),
     page: int = Query(default=1, ge=1),
 ) -> HTMLResponse:
     return await gallery_page(
@@ -79,6 +83,7 @@ async def home_page(
         person=person,
         place=place,
         q=q,
+        sort=sort,
         page=page,
     )
 
@@ -92,6 +97,7 @@ async def gallery_page(
     person: Optional[str] = Query(default=None),
     place: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
+    sort: str = Query(default=SORT_NEWEST),
     page: int = Query(default=1, ge=1),
 ) -> HTMLResponse:
     database = require_state(request, "database")
@@ -100,6 +106,7 @@ async def gallery_page(
     pipeline = require_state(request, "pipeline")
     log_events = not pipeline.has_active_library_job()
     offset = (page - 1) * PAGE_SIZE
+    sort_order = _normalize_sort(sort)
     parsed_date_from = _parse_date(date_from)
     parsed_date_to = _parse_date(date_to)
     search_meta: dict[str, str] | None = None
@@ -132,11 +139,10 @@ async def gallery_page(
             place=place,
             query=None if ranked_ids is not None else q,
             file_ids=ranked_ids,
+            sort=sort_order,
         )
         if ranked_ids is not None:
-            rank_index = {file_id: index for index, file_id in enumerate(ranked_ids)}
             matched_ids = list(session.scalars(ids_query))
-            matched_ids.sort(key=lambda file_id: rank_index.get(file_id, len(rank_index)))
             total = len(matched_ids)
             file_ids = matched_ids[offset:offset + PAGE_SIZE]
         else:
@@ -206,6 +212,7 @@ async def gallery_page(
         date_to=date_to,
         person=person,
         place=place,
+        sort=sort_order,
     )
 
     html = f"""<!doctype html>
@@ -293,7 +300,7 @@ async def gallery_page(
     }}
     form.filters {{
       display: grid;
-      grid-template-columns: minmax(280px, 1.6fr) minmax(126px, .52fr) repeat(2, minmax(136px, .55fr)) repeat(2, minmax(150px, .65fr)) auto;
+      grid-template-columns: minmax(280px, 1.6fr) repeat(2, minmax(126px, .52fr)) repeat(2, minmax(136px, .55fr)) repeat(2, minmax(150px, .65fr)) auto;
       gap: 8px;
       padding: 10px;
       border: 1px solid var(--line);
@@ -761,6 +768,12 @@ async def gallery_page(
           </select>
         </label>
         <label>
+          Sort
+          <select name="sort">
+            {_render_sort_options(sort_order)}
+          </select>
+        </label>
+        <label>
           Date From
           <input type="date" name="date_from" value="{escape(date_from or '')}">
         </label>
@@ -797,6 +810,7 @@ async def gallery_page(
       <div class="meta-pillset">
         <span class="meta-pill">{total} items{_render_filter_hint(person, place)}</span>
         {_render_search_mode_pill(search_meta)}
+        <span class="meta-pill">Sort: {_sort_label(sort_order)}</span>
         <span class="meta-pill">Page {page} of {page_count}</span>
       </div>
       <span>{'Showing ' + str(offset + 1) + '–' + str(offset + len(items)) if items else 'Showing 0 items'}</span>
@@ -875,6 +889,7 @@ def _build_gallery_ids_query(
     place: str | None,
     query: str | None,
     file_ids: list[str] | None = None,
+    sort: str = SORT_NEWEST,
 ) -> Select:
     statement = select(MediaFile.file_id).where(
         MediaFile.status.not_in(("missing", "replaced"))
@@ -897,7 +912,7 @@ def _build_gallery_ids_query(
             )
         )
 
-    captured_at_expr = func.coalesce(MediaFile.exif_datetime, MediaFile.processed_at, MediaFile.last_seen_at)
+    captured_at_expr = _captured_at_expr()
     if date_from is not None:
         statement = statement.where(captured_at_expr >= date_from)
     if date_to is not None:
@@ -907,7 +922,9 @@ def _build_gallery_ids_query(
     if place:
         statement = statement.where(_tag_exists_clause(place, PLACE_TAG_TYPES))
 
-    return statement.order_by(MediaFile.last_seen_at.desc(), MediaFile.file_id.desc())
+    if sort == SORT_OLDEST:
+        return statement.order_by(captured_at_expr.asc(), MediaFile.file_id.asc())
+    return statement.order_by(captured_at_expr.desc(), MediaFile.file_id.desc())
 
 
 def _tag_exists_clause(tag_value: str, tag_types: tuple[str, ...]):
@@ -919,6 +936,10 @@ def _tag_exists_clause(tag_value: str, tag_types: tuple[str, ...]):
             func.lower(Tag.tag_value) == normalized.lower(),
         )
     )
+
+
+def _captured_at_expr():
+    return func.coalesce(MediaFile.exif_datetime, MediaFile.processed_at, MediaFile.last_seen_at)
 
 
 def _list_tag_values(session, tag_types: tuple[str, ...]) -> list[str]:
@@ -1059,6 +1080,26 @@ def _render_media_type_options(selected: str | None) -> str:
     return "".join(rendered)
 
 
+def _normalize_sort(value: str | None) -> str:
+    normalized = (value or SORT_NEWEST).strip().casefold()
+    return normalized if normalized in SORT_OPTIONS else SORT_NEWEST
+
+
+def _render_sort_options(selected: str) -> str:
+    labels = {
+        SORT_NEWEST: "Newest first",
+        SORT_OLDEST: "Oldest first",
+    }
+    return "".join(
+        f'<option value="{escape(value)}"{" selected" if selected == value else ""}>{escape(label)}</option>'
+        for value, label in labels.items()
+    )
+
+
+def _sort_label(sort: str) -> str:
+    return "Oldest first" if sort == SORT_OLDEST else "Newest first"
+
+
 def _render_datalist_options(values: list[str]) -> str:
     return "".join(f'<option value="{escape(value)}"></option>' for value in values)
 
@@ -1098,6 +1139,7 @@ def _render_active_filter_summary(
     date_to: str | None,
     person: str | None,
     place: str | None,
+    sort: str,
 ) -> str:
     filters: list[tuple[str, str]] = []
     if q:
@@ -1114,6 +1156,8 @@ def _render_active_filter_summary(
         filters.append(("Person", person))
     if place:
         filters.append(("Place", place))
+    if sort == SORT_OLDEST:
+        filters.append(("Sort", _sort_label(sort)))
 
     if not filters:
         return '<span class="filter-chip"><strong>Active filters</strong> None</span>'
