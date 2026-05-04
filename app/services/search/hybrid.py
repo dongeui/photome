@@ -540,30 +540,56 @@ class HybridSearchService:
         if place_filter is not None:
             effective_place_filters: list[str | None] = [place_filter]
         elif plan.place_terms:
-            # Run one filtered search per place term; merge best-distance per file
             effective_place_filters = list(plan.place_terms)
         else:
             effective_place_filters = [None]
 
         merged: dict[str, dict] = {}
+        multi_place = len(effective_place_filters) > 1
 
         for variant in plan.visual_queries:
             query_bytes = self._backend.encode_text(variant)
             if not query_bytes:
                 # CLIP model not available or encoding failed — skip this variant
                 continue
-            for pf in effective_place_filters:
+
+            if multi_place:
+                # Fetch once without place_filter (larger limit to compensate for
+                # selectivity), then filter by tag values in Python.
+                # This avoids N FAISS searches + N _batch_load_supplements calls.
+                pf_set = {pf.casefold() for pf in effective_place_filters}
+                raw = self._backend.search_by_embedding(
+                    query_bytes,
+                    limit=limit * len(effective_place_filters) * 4,
+                    place_filter=None,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+                rank = 0
+                for result in raw:
+                    tag_values = {
+                        str(t.get("value", "")).casefold()
+                        for t in (result.get("tags") or [])
+                    }
+                    if not (pf_set & tag_values):
+                        continue
+                    rank += 1
+                    file_id = str(result["file_id"])
+                    if file_id not in merged or float(result.get("distance", 99.0)) < float(merged[file_id].get("distance", 99.0)):
+                        result["semantic_query"] = variant
+                        result["semantic_variant_rank"] = rank
+                        merged[file_id] = result
+            else:
                 results = self._backend.search_by_embedding(
                     query_bytes,
                     limit=limit,
-                    place_filter=pf,
+                    place_filter=effective_place_filters[0],
                     date_from=date_from,
                     date_to=date_to,
                 )
                 for rank, result in enumerate(results, start=1):
                     file_id = str(result["file_id"])
-                    current = merged.get(file_id)
-                    if current is None or float(result.get("distance", 99.0)) < float(current.get("distance", 99.0)):
+                    if file_id not in merged or float(result.get("distance", 99.0)) < float(merged[file_id].get("distance", 99.0)):
                         result["semantic_query"] = variant
                         result["semantic_variant_rank"] = rank
                         merged[file_id] = result
