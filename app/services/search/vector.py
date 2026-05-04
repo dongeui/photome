@@ -228,11 +228,10 @@ class FaissVectorIndex:
                 continue
             media_file: MediaFile = meta["media_file"]
 
-            # Apply filters
-            if place_filter:
-                tags = {t.tag_value for t in (media_file.tags or [])}
-                if place_filter not in tags:
-                    continue
+            # Apply filters using pre-extracted plain data to avoid accessing lazy
+            # relationships on a detached ORM object (DetachedInstanceError).
+            if place_filter and place_filter not in meta["tag_values"]:
+                continue
             if isinstance(date_from, datetime) and media_file.exif_datetime and media_file.exif_datetime < date_from:
                 continue
             if isinstance(date_to, datetime) and media_file.exif_datetime and media_file.exif_datetime > date_to:
@@ -283,12 +282,18 @@ class FaissVectorIndex:
                 continue
             norm = float(np.linalg.norm(vec)) or 1.0
             vectors.append(vec / norm)
-            id_map.append(str(media_file.file_id))
-            meta_map[str(media_file.file_id)] = {
+            fid = str(media_file.file_id)
+            id_map.append(fid)
+            meta_map[fid] = {
                 "ref": embedding.embedding_ref,
                 "model": embedding.model_name,
                 "version": embedding.version,
                 "media_file": media_file,
+                # Pre-extract tag values so search() never accesses the lazy
+                # `media_file.tags` relationship on a potentially detached object.
+                "tag_values": frozenset(
+                    t.tag_value for t in (media_file.tags or []) if t.tag_value
+                ),
             }
 
         if not vectors:
