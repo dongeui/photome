@@ -15,6 +15,7 @@ Usage
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -52,13 +53,15 @@ _EMPTY_VOCAB = TagVocabulary()
 class TagVocabularyCache:
     """Per-process TTL cache of tag vocabulary loaded from SQLAlchemy session.
 
-    Thread-safe for read; stale reads are acceptable within the TTL window.
+    Thread-safe for read; concurrent refresh is serialised by _refresh_lock so
+    only one thread issues the DB query when the TTL expires.
     """
 
     # Process-level singleton populated on first access per session factory.
     # Each SqlAlchemyHybridSearchBackend instance shares this across requests.
     _cache: TagVocabulary = _EMPTY_VOCAB
     _loaded_at: float = 0.0
+    _refresh_lock: threading.Lock = threading.Lock()
 
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -68,7 +71,12 @@ class TagVocabularyCache:
         now = time.monotonic()
         if now - TagVocabularyCache._loaded_at < _TTL_SECONDS and not TagVocabularyCache._cache.is_empty():
             return TagVocabularyCache._cache
-        return self._refresh(now)
+        with TagVocabularyCache._refresh_lock:
+            # Re-check under lock: another thread may have already refreshed.
+            now = time.monotonic()
+            if now - TagVocabularyCache._loaded_at < _TTL_SECONDS and not TagVocabularyCache._cache.is_empty():
+                return TagVocabularyCache._cache
+            return self._refresh(now)
 
     @classmethod
     def invalidate(cls) -> None:
