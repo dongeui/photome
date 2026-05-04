@@ -815,7 +815,7 @@ def _matches_place_terms(result: dict, plan: QueryPlan) -> bool:
         return True
     place_set = {term.casefold() for term in plan.place_terms}
     tag_values = {str(tag.get("value", "")).casefold() for tag in (result.get("tags") or [])}
-    return bool(place_set & tag_values)
+    return any(_term_matches_value(term, value) for term in place_set for value in tag_values)
 
 
 _DAYPART_HOURS: dict[str, tuple[int, int]] = {
@@ -882,6 +882,16 @@ def _expanded_filter_terms(terms: set[str]) -> set[str]:
         if cluster & terms:
             expanded |= cluster
     return expanded
+
+
+def _term_matches_value(term: str, value: str) -> bool:
+    if not term or not value:
+        return False
+    if term == value:
+        return True
+    if len(term) < 2 or len(value) < 2:
+        return False
+    return term in value or value in term
 
 
 def _like_pattern(query: str) -> str:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from importlib import resources
 
-from app.services.search.hybrid import HybridSearchService, resolve_effective_mode
-from app.services.search.planner import plan_query
+from app.services.search.hybrid import HybridSearchService, apply_hard_filters, resolve_effective_mode
+from app.services.search.planner import QueryPlan, plan_query
 from app.services.search.query_translate import expand_for_clip, normalize_query
 from app.services.search.tokenizer import korean_nouns
 
@@ -234,6 +234,31 @@ def test_condition_fallback_relaxes_to_place_term() -> None:
     assert meta.get("fallback") in (
         "condition_visual_only", "condition_place_only", "date_relaxed"
     )
+
+
+def test_place_hard_filter_accepts_hierarchical_geocode_tag() -> None:
+    plan = QueryPlan(
+        original_query="스위스에서 찍은 사진",
+        normalized_query="스위스에서 찍은 사진",
+        keyword_query="스위스",
+        visual_queries=["스위스에서 찍은 사진"],
+        date_from=None,
+        date_to=None,
+        person_terms=[],
+        place_terms=["스위스"],
+        ocr_terms=[],
+        visual_terms=[],
+        intent="visual",
+        require_place_match=True,
+    )
+    results = [
+        {"file_id": "zurich", "tags": [{"type": "place", "value": "스위스 취리히"}]},
+        {"file_id": "tokyo", "tags": [{"type": "place", "value": "일본 도쿄"}]},
+    ]
+
+    filtered = apply_hard_filters(results, plan)
+
+    assert [item["file_id"] for item in filtered] == ["zurich"]
 
 
 def test_heuristic_splits_inner_joiner_compound() -> None:

@@ -595,7 +595,7 @@ class HybridSearchService:
             effective_place_filters = [None]
 
         merged: dict[str, dict] = {}
-        multi_place = len(effective_place_filters) > 1
+        python_place_filter = place_filter is None and bool(plan.place_terms)
 
         for variant in plan.visual_queries:
             query_bytes = self._backend.encode_text(variant)
@@ -603,10 +603,10 @@ class HybridSearchService:
                 # CLIP model not available or encoding failed — skip this variant
                 continue
 
-            if multi_place:
-                # Fetch once without place_filter (larger limit to compensate for
-                # selectivity), then filter by tag values in Python.
-                # This avoids N FAISS searches + N _batch_load_supplements calls.
+            if python_place_filter:
+                # Planner-extracted place terms may be coarser than stored EXIF
+                # geocode tags ("스위스" vs "스위스 취리히"). Fetch once and use
+                # flexible tag matching instead of forcing an exact vector filter.
                 pf_set = {pf.casefold() for pf in effective_place_filters}
                 raw = self._search_embedding_channel(
                     query_bytes,
@@ -622,7 +622,7 @@ class HybridSearchService:
                         str(t.get("value", "")).casefold()
                         for t in (result.get("tags") or [])
                     }
-                    if not (pf_set & tag_values):
+                    if not any(_term_matches_value(term, value) for term in pf_set for value in tag_values):
                         continue
                     rank += 1
                     file_id = str(result["file_id"])
@@ -891,7 +891,7 @@ def _matches_place_terms(result: dict, plan: "QueryPlan") -> bool:
         return True
     place_set = {term.casefold() for term in plan.place_terms}
     tag_values = {str(tag.get("value", "")).casefold() for tag in (result.get("tags") or [])}
-    return bool(place_set & tag_values)
+    return any(_term_matches_value(term, value) for term in place_set for value in tag_values)
 
 
 _DAYPART_HOURS: dict[str, tuple[int, int]] = {
@@ -1059,7 +1059,11 @@ def apply_context_filter_boost(results: list[dict], plan: "QueryPlan") -> None:
         tag_values = {str(tag.get("value", "")).casefold() for tag in tags}
         bonus = 0.0
 
-        matched_places = place_set & tag_values
+        matched_places = {
+            term
+            for term in place_set
+            if any(_term_matches_value(term, value) for value in tag_values)
+        }
         if matched_places:
             bonus += BOOST_PLACE_MATCH * len(matched_places)
 
@@ -1349,6 +1353,16 @@ def _best_bigram_match(token: str, tags: frozenset) -> tuple[str | None, float]:
 def _is_coordinate_tag(value: str) -> bool:
     """Return True if the tag value looks like a raw GPS coordinate."""
     return bool(__import__("re").match(r"^-?\d+\.\d+,-?\d+\.\d+$", value))
+
+
+def _term_matches_value(term: str, value: str) -> bool:
+    if not term or not value:
+        return False
+    if term == value:
+        return True
+    if len(term) < 2 or len(value) < 2:
+        return False
+    return term in value or value in term
 
 
 def _preview_results(results: list[dict], *, limit: int = 8) -> list[dict]:
