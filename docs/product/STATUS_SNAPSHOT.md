@@ -1,5 +1,5 @@
 # Status Snapshot
-updated 2026-04-29 (검색 강화 Round 1~3 완료)
+updated 2026-05-04 (검색 강화 Round 1~3 + B안 태그 서브타입 + AI pack UI 완료)
 
 이 문서는 아래 4가지만 남긴다.
 
@@ -18,11 +18,11 @@ updated 2026-04-29 (검색 강화 Round 1~3 완료)
 - 얼굴 검출·임베딩은 OpenCV YuNet + SFace를 사용하고, centroid 기반 사람 클러스터링으로 같은 얼굴은 다른 `file_id`에서도 같은 `person-XXXXXX` 태그를 재사용한다.
 - EXIF GPS 기반 `place`(coarse)와 `place_detail`(exact) 태그 생성이 구현돼 있다.
 - 스테이지-2 구현은 `T16~T23`까지 코드가 들어가 있다. 범위는 reverse geocoding, embedding/search, OCR, caption, NL query parser, `/search` 하이브리드 검색이다.
-- `Phase 1 polling`과 `Phase 2 semantic scheduling`은 설정과 `/status` 응답에 반영돼 있다. semantic 버전 세트는 `place/person/ocr/caption/embedding/search` 기준으로 노출된다.
+- `Phase 1 polling`과 `Phase 2 semantic scheduling`은 설정과 `/status` 응답에 반영돼 있다. semantic 버전 세트는 `place/person/ocr/caption/embedding/auto_tags/search` 기준으로 노출된다.
 - Phase 1 dashboard에서 런타임 source root를 입력해 `POST /scan?source_roots=...`로 스캔할 수 있다. 경로 미입력 시 환경변수 source root를 그대로 사용한다.
 - Phase 2는 독립 semantic maintenance cycle로 돈다. `run_semantic_maintenance()`는 `search_documents`가 없거나 stale이거나 version mismatch인 media만 처리하며, non-blocking lock으로 중복 실행을 막는다.
 - `search_documents`는 Phase 2 canonical search document다. 파일명, 상대 경로, annotation, OCR, tag, person, place, analysis signal, embedding ref를 집계한다.
-- SQLite FTS5 virtual table `search_documents_fts`가 keyword search acceleration layer로 붙었다. FTS 실패 시 기존 LIKE fallback을 유지한다.
+- SQLite FTS5 virtual table이 keyword search acceleration layer로 붙었다. unicode61 테이블(`search_documents_fts`)과 trigram 테이블(`search_documents_fts_ko`)을 이중 운영한다. FTS 실패 시 기존 LIKE fallback을 유지한다.
 - 수동 Phase 2 검증 endpoint는 `POST /scan/semantic-maintenance`다.
 - `QueryPlanner`가 추가됐다. 쿼리를 keyword/OCR/person/place/date/visual intent로 분해하고 `/search` 응답 `meta.query_plan`에 노출한다.
 - `VectorIndexBackend` 추상화와 `LocalNumpyVectorIndex` 기본 구현이 추가됐다. FAISS/LanceDB/Qdrant는 adapter로 확장한다.
@@ -61,32 +61,51 @@ updated 2026-04-29 (검색 강화 Round 1~3 완료)
 - **SearchEvent 테이블**: 모든 검색 쿼리·모드·의도·결과수·fallback 경로 기록. 미래 자동 가중치 튜닝 데이터 축적.
 - **결과 다양성 cap**: 동일 날짜 최대 5장 제한 — 같은 이벤트가 결과 상단 독점 방지.
 - **FAISS fetch_k 동적 조정**: 날짜 범위 폭에 따라 fetch multiplier를 2~20배 자동 산정.
+- **HINT 세트 YAML화**: `face_hints`, `text_hints`, `screen_hints`, `travel_hints`, `celebration_hints`를 `vocab_seed.yaml`로 이동. 코드 하드코딩 제거.
+
+### B안 auto tag 서브타입 — 완료
+
+- **`tag_type="auto"` → 5개 서브타입 분리**: `auto_person`, `auto_scene`, `auto_object`, `auto_event`, `auto_screen`.
+- **`ClipConcept.tag_type` 필드 추가**: 25개 CLIP 개념에 각각 서브타입 할당.
+- **`AUTO_TAG_TYPES` 상수**: `app/services/analysis/auto_tags.py`에서 export. pipeline에서 "auto" 문자열 하드코딩 제거.
+- **TagVocabularyCache 분류 확장**: `auto_scene` → `_PLACE_TAG_TYPES`, `auto_person` → `_PERSON_TAG_TYPES`. QueryPlanner가 CLIP 기반 장소/인물 태그를 인식.
+- **`search_documents` people/places 필드**: `auto_person` → `people_json`, `auto_scene` → `places_json` 포함.
+- **`semantic_auto_tag_version`**: 기본값 `auto-v1` → `auto-v2`. 다음 semantic maintenance 사이클에서 전체 재처리 트리거.
+- **`_migrate_auto_tag_types()`**: 서버 시작 시 자동 실행. 기존 `tag_type="auto"` 행을 서브타입으로 변환.
+- **`ix_tags_type_value` 복합 인덱스**: `tags(tag_type, tag_value)`. 기존 DB는 `_ensure_tag_indexes()`로 시작 시 자동 적용.
+
+### AI pack 웹 UI — 완료
+
+- **`/ai-pack/status`** `GET`: 패키지 설치 여부·모델 캐시 여부·stage 반환.
+- **`/ai-pack/prepare`** `POST`: 백그라운드 스레드로 모델 다운로드 시작. 중복 실행 방지.
+- **`/ai-pack/progress`** `GET`: 폴링용 — `needs_packages | needs_download | downloading | ready | error`.
+- **Dashboard 3-step UI**: Step 1 패키지 안내, Step 2 모델 다운로드(버튼→스피너→완료), Step 3 활성화 env var. 2초 폴링, 페이지 새로고침 없음.
 
 ## 현재 작업
 
 - active branch는 `main`이다.
-- 검색 강화 전 사이클 완료 (Batch 1-A~D + Round 2/3). 모두 커밋·푸시됨.
 - 로컬 서버는 `http://127.0.0.1:8000/gallery`와 `http://127.0.0.1:8000/dashboard`에서 확인 가능하다.
 - 서버 실행 설정은 Phase 1 polling off, Phase 2 semantic scheduler on, CLIP off, face analysis off다.
-- 배포/모델팩 분리 정책은 `docs/ops/PACKAGING_STRATEGY.md`에 정리한다.
+- 배포/모델팩 분리 정책은 `docs/ops/PACKAGING_STRATEGY.md`에 정리됐다.
 
 ## 남은 작업
 
 - synthetic NL QA 확장: 실제 이미지 없이 planner/channel/ranking 회귀를 강화
 - vector adapter 후보 성능 검토: FAISS/LanceDB/Qdrant 중 첫 외부 adapter 결정
-- local AI pack 준비 명령/검증 UI/모델 캐시 상태 표시 구현
 - CLIP provider 설정을 model name/pretrained/cache root/env 기반으로 분리
 - people/person group API 구현
 - reverse geocoding provider/cache 구현
 - VLM caption adapter 구현
 - `T24` NL 회귀 시나리오 자동화 마감
-- Phase 2 변경분 커밋 및 원격 푸시
 - `SCENARIO_VALIDATION_MATRIX`와 최종 QA 결과 동기화
 - GitHub label 초기 세팅
 - `AGENT_WEBHOOK_URL`, `AGENT_WEBHOOK_SECRET` secret 등록
 - branch protection에서 `Agent PR Gate` 체크 필수화
 - GitHub live 루프 연결 후 planner review / merge 루프 정식화
 - 전체 라이브러리 full ingest는 semantic 스택 검증 완료 후 재개
+- 빌드 프로파일 실체화: base / local-ai-pack 패키지 분리, Docker 이미지 분리
+- 릴리즈 메타데이터 및 스모크 테스트 스위트 (CLIP 없는 시작, offline download 차단 검증)
+- ARCHITECTURE.md auto tag 서브타입 분류 체계 및 bootstrap 마이그레이션 섹션 추가
 
 ## 참고 파일
 

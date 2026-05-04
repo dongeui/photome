@@ -133,38 +133,33 @@ Compatibility rules:
 
 Keep one codebase. Add packaging boundaries instead of forking the project.
 
-Required implementation tasks:
+### 완료된 항목 (2026-05-04)
 
-- add runtime status fields for:
-  - local AI pack installed/missing
-  - CLIP package installed/missing
-  - model cache ready/missing
-  - offline-safe mode active/inactive
-- make CLIP provider configurable:
-  - model name
-  - pretrained weight id
-  - cache root
-  - embedding version derived from provider config
-- add a model preparation command:
-  - check optional dependencies with `photome-local-ai-pack status`
-  - download/cache model while online with `photome-local-ai-pack prepare`
-  - verify offline load with `photome-local-ai-pack verify-offline`
-  - print model/cache paths and estimated size
-- add dashboard controls:
-  - show AI pack readiness
-  - show "Enable local AI image search" only when online preparation is allowed
-  - never block base scan/gallery/search when AI pack is absent
-- add build profiles:
-  - base package
-  - local-ai-pack package
-  - Docker base image
-  - Docker AI image or AI layer
-- add release metadata:
+- ✅ runtime status fields: CLIP 패키지 설치 여부·모델 캐시 여부·offline 플래그 — `/status` JSON 및 dashboard에 노출
+- ✅ model preparation CLI (`app/cli/local_ai_pack.py`):
+  - `photome-local-ai-pack status` — 패키지·캐시 상태 출력
+  - `photome-local-ai-pack prepare` — 온라인 모델 다운로드 및 로드 테스트
+  - `photome-local-ai-pack verify-offline` — 오프라인 캐시 검증
+- ✅ dashboard AI pack 3-step 설치 UI (`/ai-pack/status|prepare|progress`):
+  - Step 1: 패키지 설치 안내 (pip 명령 + Copy 버튼)
+  - Step 2: 모델 다운로드 버튼 → 백그라운드 다운로드 → 폴링 진행 표시
+  - Step 3: 활성화 env var 안내 (PHOTOME_CLIP_ENABLED=1 + Copy 버튼)
+  - 베이스 앱의 scan/gallery/search는 AI pack 없이도 차단되지 않음
+
+### 남은 항목
+
+- CLIP provider 설정 분리: model name / pretrained / cache root를 settings에서 통합 관리 (현재 CLI와 app settings가 별도 경로 사용)
+- build profiles 실체화:
+  - base 패키지 (no torch/open_clip)
+  - local-ai-pack 패키지 (torch + open_clip + model cache)
+  - Docker base 이미지
+  - Docker AI 이미지 또는 AI 레이어
+- release metadata:
   - app version
   - model pack version
   - supported OS/architecture
   - bundled dependency versions
-- add smoke tests:
+- smoke tests:
   - base app starts with no CLIP package installed
   - CLIP enabled but model missing degrades cleanly
   - offline mode never attempts network model download
