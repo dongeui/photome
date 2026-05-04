@@ -66,3 +66,15 @@
 - **Fallback:** if the primary path cannot be read or decode fails, use the Phase 1 thumbnail under `derived_root` (`thumb/v1/...`) when that file exists.
 - **When it runs:** With `PHOTOME_CLIP_ENABLED=1`, CLIP embedding and CLIP-derived auto-tags run during **Phase 1** image processing (`_refresh_media_assets` → `_materialize_image_semantics`) alongside thumbnail generation. **Phase 2** (scheduled semantic maintenance / backfill) catches up missing embeddings, stale search documents, or version skew — not a second pass for “better” vectors on unchanged pixels.
 - **Phase 1 / Phase 2 jobs:** Only one library job writes the catalog at a time; that serialization is unrelated to CLIP source choice. Policy A does not require the thumbnail to exist before CLIP runs, but the fallback works best if Phase 1 has already written the thumb when the source path fails.
+
+## Search and auto-tag vocabulary changes
+
+- YAML-backed vocabularies are loaded and cached in process:
+  - `app/services/analysis/clip_concepts.yaml`: CLIP prompts, thresholds, and aliases.
+  - `app/services/analysis/filename_tags.yaml`: filename keyword auto-tags.
+  - `app/services/search/tag_synonyms.yaml`: search-time tag synonyms.
+  - `app/services/search/vocab_seed.yaml`: planner terms, translations, templates, and typo correction.
+- Operational default: restart the service after editing these files.
+- If CLIP prompts, thresholds, concept aliases, filename tag rules, or receipt/signal heuristics change behavior, bump `semantic_auto_tag_version` and rerun semantic maintenance/backfill.
+- If search document composition changes, bump `semantic_search_version`.
+- Code has `clear_auto_tag_caches()` / `clear_tag_synonyms_cache()` helpers for tests or a future admin reload endpoint, but production hot-reload is not the default contract.

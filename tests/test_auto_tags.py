@@ -12,6 +12,7 @@ from app.models.base import Base
 from app.models.media import MediaFile
 from app.models.semantic import MediaAutoTagState
 from app.services.analysis import auto_tags
+from app.services.analysis.filename_lexicon import load_filename_tag_rules
 from app.services.semantic import SemanticCatalog
 
 
@@ -52,6 +53,38 @@ def test_clip_concept_tags_expand_natural_language_aliases(monkeypatch) -> None:
     assert "sea" in values
     assert "ocean" in values
     assert "바다" in values
+
+
+def test_filename_tag_rules_are_packaged_yaml() -> None:
+    rules = load_filename_tag_rules()
+
+    assert rules
+    tags = auto_tags.tags_from_filename("family_beach_trip_2024.jpg")
+    assert [(tag.tag_type, tag.tag_value) for tag in tags] == [
+        ("auto_scene", "beach"),
+        ("auto_scene", "travel"),
+        ("auto_person", "group"),
+    ]
+
+
+def test_clear_auto_tag_caches_clears_concept_vector_cache(monkeypatch) -> None:
+    monkeypatch.setattr(auto_tags.clip_embedding, "ensure_models", lambda: None)
+    monkeypatch.setattr(
+        auto_tags.clip_embedding,
+        "encode_text",
+        lambda _prompt: np.array([1.0, 0.0, 0.0], dtype="float32").tobytes(),
+    )
+    monkeypatch.setattr(
+        auto_tags.clip_embedding,
+        "embedding_from_bytes",
+        lambda _payload: np.array([1.0, 0.0, 0.0], dtype="float32"),
+    )
+
+    auto_tags._concept_vectors()
+    assert auto_tags._concept_vectors.cache_info().currsize == 1
+
+    auto_tags.clear_auto_tag_caches()
+    assert auto_tags._concept_vectors.cache_info().currsize == 0
 
 
 def test_auto_tag_state_records_version(tmp_path: Path) -> None:

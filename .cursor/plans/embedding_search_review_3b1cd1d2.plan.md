@@ -7,13 +7,13 @@ todos:
     status: completed
   - id: yaml-filename-tags
     content: "Optional: move _FILENAME_KEYWORD_TAGS patterns to packaged YAML; bump auto_tag version on change"
-    status: pending
+    status: completed
   - id: golden-search-tests
     content: "Optional: add small golden tests for planner mode + channel stats on representative queries"
-    status: pending
+    status: completed
   - id: cache-invalidate-doc
     content: Document or implement synonym/clip lexicon cache invalidation if hot YAML reload is required
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -78,10 +78,10 @@ flowchart LR
 | **임베딩 소스 vs `_analysis_source_path`** | `_analysis_source_path`는 썸네일 우선, `_materialize_clip_embedding`은 `current_path` 우선이다. 제품 스펙(A/B/C, 아래 «스펙 메모») 미확정 시 운영 해석이 갈린다. |
 | **개념 벡터 캐시** | `_concept_vectors`가 `lru_cache`로 프로세스 생애 동안 고정. **YAML만 바꾸고 서버 재시작 없이** 핫 리로드하면 태깅은 옛 프롬프트 벡터를 쓸 수 있음(재시작 전제는 RUNBOOK/주석에 명시하는 편이 안전). |
 | **태깅 vs 검색 프롬프트 불일치** | 검색은 사용자 질의를 `expand_for_clip`으로 바꾸고, 태깅은 **고정 영어 프롬프트**만 사용. 의도적으로 분리된 것이지만, 새 “시각 개념”을 추가할 때 **검색 lexicon/template**과 **clip_concepts**를 함께 손봐야 효과가 난다는 운영 부담은 남음. |
-| **파일명 휴리스틱** | [`_FILENAME_KEYWORD_TAGS`](c:\Source\photome\app\services\analysis\auto_tags.py)에 여전히 정규식·한글 토큰이 코드에 있음. 프로젝트 규칙(설정/YAML 선호) 관점에서 **마지막 하드코딩 덩어리**로 남음. |
+| **파일명 휴리스틱** | 완료: 파일명 기반 auto-tag rule은 [`filename_tags.yaml`](c:\Source\photome\app\services\analysis\filename_tags.yaml)로 이동. `semantic_auto_tag_version` bump 대상임. |
 | **Receipt 등 시그널** | `_looks_like_receipt` 등 한글 힌트가 코드에 있음. 동일하게 설정화 여지. |
 | **학습형 리랭킹** | `RerankerProtocol`은 있으나 기본 패스스루. Search 이벤트 로그는 있으나 **오프라인 평가/가중치 학습**은 미연결. |
-| **품질 회귀 방지** | `/search/debug`, 벤치 엔드포인트는 있으나, **대표 한국어 질의 + 기대 채널 비율**을 고정한 소수 골든 테스트는 추가 여지. |
+| **품질 회귀 방지** | 완료: 대표 visual/OCR 질의에 대해 `effective_mode`와 debug `channel_stats`를 고정하는 골든 테스트 추가. |
 
 ---
 
@@ -121,9 +121,9 @@ flowchart LR
 
 1. **문서/주석 정렬**: 위 표 중 **A / B / C** 제품 결정 후 [`pipeline.py`](c:\Source\photome\app\services\processing\pipeline.py) 동작(원본 경로 vs 썸네일 우선)과 RUNBOOK을 한 줄로 일치시킴. B 선택 시 스케줄러/잡 순서(썸네일 선행) 명시.
 2. **lexicon 단일 체크리스트**: `clip_concepts.yaml` 변경 시 `vocab_seed.yaml` / `query_translate` seed와 함께 검토한다는 체크리스트를 engineering doc 또는 `clip_concepts.yaml` 상단 주석에 추가.
-3. **파일명 패턴 YAML화**: `_FILENAME_KEYWORD_TAGS`를 패키지 YAML로 옮기고 `semantic_auto_tag_version`과 연동 (규칙 준수 + 튜닝 용이).
-4. **골든 검색 테스트**: `tests/`에 짧은 질의 세트 + mock 백엔드 또는 스냅샷 메타로 “effective_mode / 채널 hit 수” 회귀 방지.
-5. **선택**: YAML 변경 시 `clear_clip_lexicon_cache` / `clear_tag_synonyms_cache`를 lifespan 또는 admin 엔드포인트에서 호출할지 검토(핫 리로드 요구 시).
+3. **파일명 패턴 YAML화**: 완료. `_FILENAME_KEYWORD_TAGS`를 패키지 YAML로 이동.
+4. **골든 검색 테스트**: 완료. `바다 여행`, `영수증 오류` 대표 질의로 `effective_mode` / 채널 hit 수 회귀 방지.
+5. **선택**: 완료. YAML 변경은 운영 기본값으로 서비스 재시작 + 버전 bump를 문서화했고, 테스트/미래 admin reload용 cache clear helper를 제공.
 
 ---
 

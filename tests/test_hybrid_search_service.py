@@ -47,6 +47,35 @@ class ReverseReranker:
         return list(reversed(results))
 
 
+class GoldenChannelBackend(FakeBackend):
+    def search_by_ocr(self, query: str, *, limit: int) -> list[dict]:
+        if query == "영수증 오류":
+            return [{"file_id": "receipt-file", "ocr_text": "영수증 오류", "ocr_match_kind": "word"}]
+        return []
+
+    def search_by_embedding(self, query_embedding: bytes, **_kwargs) -> list[dict]:
+        return [{"file_id": "beach-trip", "distance": 0.1}]
+
+    def search_by_shadow_doc(self, query: str, *, limit: int) -> list[dict]:
+        if query == "바다 여행":
+            return [
+                {
+                    "file_id": "beach-trip",
+                    "tags": [{"type": "auto_scene", "value": "beach"}],
+                    "tag_exact_match": True,
+                }
+            ]
+        if query == "영수증 오류":
+            return [
+                {
+                    "file_id": "receipt-file",
+                    "tags": [{"type": "auto_screen", "value": "receipt"}],
+                    "tag_exact_match": True,
+                }
+            ]
+        return []
+
+
 def test_korean_query_expands_for_clip() -> None:
     variants = expand_for_clip("자전거")
 
@@ -144,6 +173,38 @@ def test_custom_reranker_order_is_preserved() -> None:
 
     assert meta["effective_mode"] == "hybrid"
     assert [item["file_id"] for item in results[:2]] == ["file-b", "file-a"]
+
+
+def test_golden_visual_query_uses_clip_and_shadow_channels() -> None:
+    service = HybridSearchService(GoldenChannelBackend())
+
+    results, meta = service.search_with_meta("바다 여행", limit=5, mode="hybrid", debug=True)
+
+    assert meta["effective_mode"] == "semantic"
+    assert meta["intent_reason"] == "auto-travel"
+    assert meta["query_plan"]["intent"] == "visual"
+    assert meta["debug"]["channel_stats"] == {
+        "ocr": 0,
+        "clip": 1,
+        "shadow": 1,
+        "fused": 1,
+        "final": 1,
+    }
+    assert results[0]["file_id"] == "beach-trip"
+    assert results[0]["match_reason"] == "clip+shadow"
+
+
+def test_golden_ocr_query_skips_clip_channel() -> None:
+    service = HybridSearchService(GoldenChannelBackend())
+
+    results, meta = service.search_with_meta("영수증 오류", limit=5, mode="hybrid", debug=True)
+
+    assert meta["effective_mode"] == "ocr"
+    assert meta["query_plan"]["intent"] == "ocr"
+    assert meta["debug"]["channel_stats"]["ocr"] == 1
+    assert meta["debug"]["channel_stats"]["clip"] == 0
+    assert meta["debug"]["channel_stats"]["shadow"] == 1
+    assert results[0]["file_id"] == "receipt-file"
 
 
 def test_condition_fallback_relaxes_to_place_term() -> None:
